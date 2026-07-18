@@ -226,7 +226,7 @@ async def run_standalone(args: argparse.Namespace) -> None:
 
     # Setup storage
     data_dir = Path(args.data_dir)
-    storage = LocalStorage(data_dir)
+    storage = LocalStorage(data_dir, pool_config=pools_list)
     storage.ensure_initial_files()
 
     # Write pools.json to api/config/

@@ -34,9 +34,10 @@ class LocalStorage:
     updates) and the StorageBackend protocol for aggregation.
     """
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, pool_config: List[dict] = None) -> None:
         self.data_dir = Path(data_dir)
         self.api_dir = self.data_dir / "api"
+        self.pool_config = pool_config or []
 
     # ------------------------------------------------------------------
     # Initial file creation (R3.9, R1.6)
@@ -160,7 +161,7 @@ class LocalStorage:
             existing = []
 
         # Build the new summary entry
-        summary = build_race_summary(race_result)
+        summary = build_race_summary(race_result, pool_config=self.pool_config)
         new_height = summary.get("height")
         new_vantage = summary.get("vantage")
 

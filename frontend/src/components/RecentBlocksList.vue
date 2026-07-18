@@ -20,7 +20,8 @@ const { formatVantage, getFlag } = useVantageNames()
 /**
  * Computed rows derived from the store's recentBlocks.
  * Filters by selected vantage point when not "combined".
- * Filters by pool type when "solo" is selected (winner must be a solo pool).
+ * When Solo filter is active, shows the fastest solo pool as winner/runner-up
+ * (never hides blocks entirely).
  */
 const rows = computed(() => {
   let blocks = store.recentBlocks
@@ -30,26 +31,41 @@ const rows = computed(() => {
     blocks = blocks.filter((b: RecentBlock) => b.vantage === store.selectedVantage)
   }
 
-  // Filter by pool type: only show blocks where the winner is a solo pool
-  if (props.poolTypeFilter === 'solo' && store.poolConfig.length > 0) {
-    blocks = blocks.filter((b: RecentBlock) => {
-      const winner = b.winner_nonempty || b.winner
-      if (!winner) return false
-      const config = store.poolConfig.find((p) => p.name === winner)
-      if (!config) return false
-      return (config as any).pool_type === 'solo'
-    })
-  }
-
   return blocks.map((block: RecentBlock) => {
+    const isSolo = props.poolTypeFilter === 'solo'
+
+    // When Solo filter active: use solo-specific fields (with fallback to overall winner)
+    let winner: string | null
+    let runnerUp: string | null
+    let gap: number | null
+
+    if (isSolo && block.winner_solo !== undefined) {
+      // New data with solo fields
+      winner = block.winner_solo || null
+      runnerUp = block.second_solo || null
+      gap = block.second_solo_delay_ms ?? null
+    } else if (isSolo) {
+      // Old data without solo fields: fall back to winner_nonempty if it's a solo pool
+      const w = block.winner_nonempty || block.winner
+      const config = store.poolConfig.find((p) => p.name === w)
+      winner = config && (config as any).pool_type === 'solo' ? w : null
+      runnerUp = null
+      gap = null
+    } else {
+      // Any/All filter: show overall winner
+      winner = block.winner_nonempty || block.winner
+      runnerUp = block.second
+      gap = block.second_delay_ms
+    }
+
     return {
       block_height: block.height,
       first_epoch: block.epoch,
       vantage: block.vantage || 'unknown',
       block_miner: block.miner,
-      winner: block.winner_nonempty || block.winner,
-      runnerUp: block.second,
-      gap: block.second_delay_ms,
+      winner,
+      runnerUp,
+      gap,
       spread: block.spread_ms,
       poolsCount: block.pools_seen,
     }

@@ -85,6 +85,10 @@ export interface RecentBlock {
   spread_ms: number
   pools_seen: number
   vantage: string
+  // Solo-specific fields (present only for new data with pool_config)
+  winner_solo?: string | null
+  second_solo?: string | null
+  second_solo_delay_ms?: number | null
 }
 
 /** Vantage point health status from status/vantages.json */
