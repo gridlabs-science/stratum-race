@@ -34,6 +34,12 @@ def build_race_summary(race_result: dict, pool_config: Optional[List[dict]] = No
     empty_first_pools = race_result.get("empty_first_pools", [])
     empty_jumpstart = empty_first_pools[0] if empty_first_pools else None
 
+    # Determine full-template runner-up (second place in nonempty_arrivals_offset_ms)
+    nonempty_arrivals = race_result.get("nonempty_arrivals_offset_ms") or {}
+    sorted_nonempty = sorted(nonempty_arrivals.items(), key=lambda x: x[1])
+    second_nonempty = sorted_nonempty[1][0] if len(sorted_nonempty) > 1 else None
+    second_nonempty_delay_ms = sorted_nonempty[1][1] if len(sorted_nonempty) > 1 else None
+
     # Build UTC timestamp from epoch
     first_epoch = race_result.get("first_epoch", 0)
     dt = datetime.fromtimestamp(first_epoch, tz=timezone.utc)
@@ -49,6 +55,8 @@ def build_race_summary(race_result: dict, pool_config: Optional[List[dict]] = No
         "empty_jumpstart": empty_jumpstart,
         "second": second,
         "second_delay_ms": second_delay_ms,
+        "second_nonempty": second_nonempty,
+        "second_nonempty_delay_ms": second_nonempty_delay_ms,
         "spread_ms": spread_ms,
         "pools_seen": len(arrivals),
         "vantage": race_result.get("vantage"),
@@ -57,9 +65,8 @@ def build_race_summary(race_result: dict, pool_config: Optional[List[dict]] = No
     # Compute solo pool winner/runner-up from full-template arrivals
     if pool_config is not None:
         solo_pools = _get_solo_pool_names(pool_config)
-        nonempty = race_result.get("nonempty_arrivals_offset_ms") or {}
         sorted_nonempty_solo = [
-            (pool, offset) for pool, offset in sorted(nonempty.items(), key=lambda x: x[1])
+            (pool, offset) for pool, offset in sorted_nonempty
             if pool in solo_pools
         ]
         summary["winner_solo"] = sorted_nonempty_solo[0][0] if sorted_nonempty_solo else None

@@ -52,10 +52,10 @@ const rows = computed(() => {
       runnerUp = null
       gap = null
     } else {
-      // Any/All filter: show overall winner
+      // Any/All filter: show overall full-template winner and runner-up
       winner = block.winner_nonempty || block.winner
-      runnerUp = block.second
-      gap = block.second_delay_ms
+      runnerUp = block.second_nonempty ?? block.second
+      gap = block.second_nonempty_delay_ms ?? block.second_delay_ms
     }
 
     return {

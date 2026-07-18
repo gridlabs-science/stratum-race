@@ -89,6 +89,9 @@ export interface RecentBlock {
   winner_solo?: string | null
   second_solo?: string | null
   second_solo_delay_ms?: number | null
+  // Full-template runner-up (always present in new data)
+  second_nonempty?: string | null
+  second_nonempty_delay_ms?: number | null
 }
 
 /** Vantage point health status from status/vantages.json */
