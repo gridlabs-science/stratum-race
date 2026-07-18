@@ -94,20 +94,15 @@ const primaryRace = computed(() => races.value[0] ?? null)
 /** Whether this block has data from multiple vantage points */
 const hasMultipleVantages = computed(() => races.value.length > 1)
 
-/** All unique vantage points for this block */
-const vantagePoints = computed(() => [...new Set(races.value.map((r: any) => r.vantage))])
+/** All unique vantage points for this block (sorted for deterministic color assignment) */
+const vantagePoints = computed(() => [...new Set(races.value.map((r: any) => r.vantage))].sort())
 
-/** Accent colors for vantage points */
-const vantageColors: Record<number, string> = {
-  0: 'var(--accent)',
-  1: '#f59e0b',
-  2: '#10b981',
-  3: '#ec4899',
-  4: '#8b5cf6',
-}
+/** Fixed color palette for vantage points (assigned by sorted name, always consistent) */
+const VANTAGE_COLORS = ['var(--accent)', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6']
 
-function getVantageColor(index: number): string {
-  return vantageColors[index] ?? 'var(--text-secondary)'
+function getVantageColor(vantage: string): string {
+  const idx = vantagePoints.value.indexOf(vantage)
+  return VANTAGE_COLORS[idx >= 0 ? idx : 0] ?? 'var(--text-secondary)'
 }
 
 /** Maximum offset across all races to scale the timeline */
@@ -224,10 +219,13 @@ const blockMiner = computed(() => {
   if (!race) return 'Unknown'
   return (race as any).block_miner || (race as any).miner || 'Unknown'
 })
-const winner = computed(() => {
-  const race = primaryRace.value
-  if (!race) return '—'
-  return (race as any).winner_nonempty || (race as any).winner || '—'
+
+/** Winners per vantage point */
+const winnersPerVantage = computed(() => {
+  return races.value.map((race: any) => ({
+    vantage: race.vantage,
+    winner: race.winner_nonempty || race.winner || '—',
+  }))
 })
 const totalSpread = computed(() => {
   const race = primaryRace.value
@@ -252,7 +250,7 @@ const formattedTime = computed(() => {
 })
 
 function goBack() {
-  router.push({ name: 'leaderboard' })
+  router.push({ name: 'recent-blocks' })
 }
 
 /**
@@ -267,8 +265,8 @@ function markerPosition(offset: number): string {
 <template>
   <div class="block-detail-view">
     <!-- Back button -->
-    <button class="back-btn" @click="goBack" aria-label="Back to leaderboard">
-      ← Back to Leaderboard
+    <button class="back-btn" @click="goBack" aria-label="Back to Recent Blocks">
+      ← Back to Recent Blocks
     </button>
 
     <!-- Not found state -->
@@ -297,7 +295,12 @@ function markerPosition(offset: number): string {
           </div>
           <div class="meta-item">
             <span class="meta-label">Winner (Full Template)</span>
-            <span class="meta-value winner-value">{{ store.displayName(winner) }}</span>
+            <div class="meta-winners">
+              <div v-for="w in winnersPerVantage" :key="w.vantage" class="winner-entry">
+                <span class="winner-vantage">{{ formatVantage(w.vantage) }}:</span>
+                <span class="meta-value winner-value">{{ store.displayName(w.winner) }}</span>
+              </div>
+            </div>
           </div>
           <div class="meta-item">
             <span class="meta-label">Total Spread</span>
@@ -314,13 +317,13 @@ function markerPosition(offset: number): string {
       <div v-if="hasMultipleVantages" class="vantage-legend">
         <span class="legend-label">Vantage Points:</span>
         <span
-          v-for="(vp, idx) in vantagePoints"
+          v-for="vp in vantagePoints"
           :key="vp"
           class="legend-item"
         >
           <span
             class="legend-dot"
-            :style="{ backgroundColor: getVantageColor(idx) }"
+            :style="{ backgroundColor: getVantageColor(vp) }"
           ></span>
           {{ formatVantage(vp) }}
         </span>
@@ -370,9 +373,9 @@ function markerPosition(offset: number): string {
                   }"
                   :style="{
                     left: markerPosition(entry.offset),
-                    borderColor: getVantageColor(entry.vantageIndex),
+                    borderColor: getVantageColor(entry.vantageName),
                     backgroundColor: entry.isFullTemplate
-                      ? getVantageColor(entry.vantageIndex)
+                      ? getVantageColor(entry.vantageName)
                       : 'transparent',
                   }"
                   :title="`${entry.vantageName}: ${entry.offset.toFixed(1)} ms${entry.isEmptyFirst ? ' (empty)' : ''}`"
@@ -486,6 +489,23 @@ function markerPosition(offset: number): string {
 .winner-value {
   color: var(--accent);
   font-weight: 600;
+}
+
+.meta-winners {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.winner-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.winner-vantage {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 /* Legends */
