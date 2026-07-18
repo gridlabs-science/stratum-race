@@ -830,13 +830,14 @@ def _fetch_json_blocking(url: str, timeout: float) -> Dict[str, Any]:
     return data
 
 
-BLOCK_LOOKUP_MAX_RETRIES = 2
-BLOCK_LOOKUP_BACKOFF_BASE = 2.0  # seconds; doubles each retry
+BLOCK_LOOKUP_MAX_RETRIES = 3
+BLOCK_LOOKUP_BACKOFF_BASE = 2.0  # seconds; doubles each retry (2, 4, 8)
 
 
 async def lookup_block_metadata(block_hash: str) -> Dict[str, Any]:
     """Lookup block height/miner tag after timing has stopped.
-    Retries on transient HTTP errors (429, 503) with exponential backoff."""
+    Retries on transient HTTP errors (404, 429, 503) with exponential backoff.
+    A 404 is retryable because mempool.space may not have indexed the block yet."""
     endpoints = [
         f"{MEMPOOL_API_BASE}/v1/block/{block_hash}",
         f"{MEMPOOL_API_BASE}/block/{block_hash}",
@@ -853,7 +854,7 @@ async def lookup_block_metadata(block_hash: str) -> Dict[str, Any]:
                 )
             except urllib.error.HTTPError as e:
                 last_error = str(e)
-                if e.code in (429, 503) and attempt < BLOCK_LOOKUP_MAX_RETRIES:
+                if e.code in (404, 429, 503) and attempt < BLOCK_LOOKUP_MAX_RETRIES:
                     wait = BLOCK_LOOKUP_BACKOFF_BASE * (2 ** attempt)
                     await asyncio.sleep(wait)
                     continue
@@ -2204,13 +2205,23 @@ async def _enrich_and_build(
     """
     if race.block_height is None and getattr(args, "tag_block_miners", False):
         try:
-            await asyncio.sleep(5.0)  # Give mempool.space time to index
+            await asyncio.sleep(8.0)  # Give mempool.space time to index
             meta = await lookup_block_metadata(race.prevhash)
             if meta.get("height") is not None:
                 race.block_height = meta["height"]
                 race.block_miner = meta.get("miner") or race.block_miner
-        except Exception:
-            pass  # Best effort — continue with null height if lookup fails
+            else:
+                print(
+                    f"[{wall_clock()}] enrichment: height lookup failed for "
+                    f"{race.prevhash[:16]}... ({meta.get('source', 'unknown')})",
+                    flush=True,
+                )
+        except Exception as e:
+            print(
+                f"[{wall_clock()}] enrichment: unexpected error for "
+                f"{race.prevhash[:16]}...: {e}",
+                flush=True,
+            )
     return _build_race_result(race, pools, args, start_time, session_races)
 
 
