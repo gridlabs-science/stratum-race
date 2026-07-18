@@ -151,7 +151,6 @@ function navigateToBlock(height: number) {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  overflow: hidden;
 }
 
 .panel-title {
@@ -238,9 +237,8 @@ function navigateToBlock(height: number) {
   font-style: italic;
 }
 
-/* Mobile responsive: show only Height, Time, Vantage, Mined By */
+/* Mobile responsive: hide less important columns, allow horizontal scroll for the rest */
 @media (max-width: 768px) {
-  .col-winner,
   .col-runner-up,
   .col-gap,
   .col-spread,
