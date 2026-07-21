@@ -45,7 +45,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--pools", default="config/pools.json", help="Path to pools.json (default: config/pools.json)")
     parser.add_argument("--pool-group", default="all", help="Pool group filter (default: all)")
     parser.add_argument("--vantage", default="local", help="Vantage point label (default: local)")
+    parser.add_argument("--gridpool-url", default=None, help="Local GridPool API URL for chain-tip correlation")
     parser.add_argument("--frontend-dir", default=None, help="Path to built frontend (default: auto-detect)")
+    parser.add_argument(
+        "--ingest-tokens-file",
+        default=None,
+        help="Untracked JSON object mapping bearer tokens to allowed vantage names",
+    )
     return parser.parse_args(argv)
 
 
@@ -101,6 +107,16 @@ def validate_config(args: argparse.Namespace) -> list:
                 file=sys.stderr,
             )
             sys.exit(1)
+        protocol = pool.get("protocol", "sv1")
+        if protocol not in {"sv1", "sv2"}:
+            print(f"Error: Pool entry {i + 1} has unsupported protocol: {protocol}", file=sys.stderr)
+            sys.exit(1)
+        if protocol == "sv2" and not pool.get("authority_pubkey"):
+            print(
+                f"Error: SV2 pool entry {i + 1} requires authority_pubkey",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         pools_list = filtered
 
     return pools_list
@@ -147,6 +163,7 @@ async def supervisor(
         pool_config=args.pools,
         pool_group=args.pool_group,
         vantage=args.vantage,
+        gridpool_url=args.gridpool_url,
         local_dir=None,  # Server handles storage via sink
         post_url=None,
         api_key=None,
@@ -229,6 +246,19 @@ async def run_standalone(args: argparse.Namespace) -> None:
     storage = LocalStorage(data_dir, pool_config=pools_list)
     storage.ensure_initial_files()
 
+    ingest_tokens = {}
+    if args.ingest_tokens_file:
+        token_path = Path(args.ingest_tokens_file)
+        try:
+            ingest_tokens = json.loads(token_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"Unable to load ingest token file: {exc}") from exc
+        if not isinstance(ingest_tokens, dict) or not all(
+            isinstance(token, str) and len(token) >= 32 and isinstance(vantage, str)
+            for token, vantage in ingest_tokens.items()
+        ):
+            raise SystemExit("Ingest token file must map tokens of at least 32 characters to vantage names")
+
     # Write pools.json to api/config/
     pools_config_path = data_dir / "api" / "config" / "pools.json"
     pools_raw = json.loads(Path(args.pools).read_text(encoding="utf-8"))
@@ -254,6 +284,8 @@ async def run_standalone(args: argparse.Namespace) -> None:
     # Find frontend
     frontend_dir = find_frontend_dir(args)
 
+    aggregation_trigger = asyncio.Event()
+
     # Create server
     server = StandaloneServer(
         data_dir=data_dir,
@@ -261,6 +293,9 @@ async def run_standalone(args: argparse.Namespace) -> None:
         host=args.host,
         port=args.port,
         vantage=args.vantage,
+        storage=storage,
+        aggregation_trigger=aggregation_trigger,
+        ingest_tokens=ingest_tokens,
     )
 
     # Stop event (shared across all components)
@@ -284,7 +319,6 @@ async def run_standalone(args: argparse.Namespace) -> None:
     print(f"{'=' * 50}\n", flush=True)
 
     # Launch background tasks
-    aggregation_trigger = asyncio.Event()
     aggregator_task = asyncio.create_task(aggregator_loop(storage, stop_event, trigger=aggregation_trigger))
     supervisor_task = asyncio.create_task(supervisor(args, pools_list, server, storage, stop_event, aggregation_trigger=aggregation_trigger))
     status_task = asyncio.create_task(startup_status(pools_list, stop_event))

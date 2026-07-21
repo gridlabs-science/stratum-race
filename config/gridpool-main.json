@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "updated_utc": "2026-07-21T00:00:00Z",
+  "pools": [
+    {
+      "name": "gridpool_hydrapool",
+      "display_name": "GridPool Hydrapool SV1",
+      "host": "127.0.0.1",
+      "port": 3333,
+      "protocol": "sv1",
+      "cohort": "gridpool-local",
+      "operator": "Grid Labs",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "gridpool-local"]
+    },
+    {
+      "name": "gridpool_datum",
+      "display_name": "GridPool DATUM SV1",
+      "host": "127.0.0.1",
+      "port": 23334,
+      "protocol": "sv1",
+      "cohort": "gridpool-local",
+      "operator": "Grid Labs",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "gridpool-local"]
+    },
+    {
+      "name": "gridpool_ckpool",
+      "display_name": "GridPool CKPool SV1",
+      "host": "127.0.0.1",
+      "port": 3335,
+      "protocol": "sv1",
+      "cohort": "gridpool-local",
+      "operator": "Grid Labs",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "gridpool-local"]
+    },
+    {
+      "name": "gridpool_sv2",
+      "display_name": "GridPool Native SV2",
+      "host": "127.0.0.1",
+      "port": 34265,
+      "protocol": "sv2",
+      "authority_pubkey": "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72",
+      "cohort": "gridpool-local",
+      "operator": "Grid Labs",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "gridpool-local"]
+    },
+    {
+      "name": "ocean",
+      "display_name": "OCEAN",
+      "host": "mine.ocean.xyz",
+      "port": 3334,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "OCEAN",
+      "pool_type": "shared",
+      "groups": ["all", "gridpool-study", "public-reference"]
+    },
+    {
+      "name": "atlaspool",
+      "display_name": "AtlasPool",
+      "host": "solo.atlaspool.io",
+      "port": 3333,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "AtlasPool",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "public-reference"]
+    },
+    {
+      "name": "public_pool",
+      "display_name": "Public Pool",
+      "host": "public-pool.io",
+      "port": 3333,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "Public Pool",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "public-reference"]
+    },
+    {
+      "name": "parasite",
+      "display_name": "Parasite",
+      "host": "parasite.wtf",
+      "port": 42069,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "Parasite",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "public-reference"]
+    },
+    {
+      "name": "pyblock",
+      "display_name": "PyBLOCK",
+      "host": "pool.pyblock.xyz",
+      "port": 4444,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "PyBLOCK",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study", "public-reference"]
+    }
+  ]
+}
+

@@ -32,6 +32,15 @@ export interface RaceResult {
   eligible_at_start: string[]
   pools_connected: number
   pools_eligible: number
+  pool_protocols?: Record<string, 'sv1' | 'sv2'>
+  pool_cohorts?: Record<string, string>
+  template_observability?: Record<string, 'opaque' | 'sv1-merkle-branch'>
+  gridpool_chain_tip?: {
+    available: boolean
+    peer_lead_vs_local_zmq_ms?: number
+    local_zmq_to_work_ms?: Record<string, number>
+    peer_header_to_work_ms?: Record<string, number>
+  }
   collector_meta: CollectorMeta
 }
 
@@ -115,6 +124,8 @@ export interface PoolConfig {
   port: number
   operator: string
   groups: string[]
+  protocol?: 'sv1' | 'sv2'
+  cohort?: string
 }
 
 /** Pool configuration file structure */

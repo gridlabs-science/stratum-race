@@ -1,0 +1,25 @@
+[Unit]
+Description=GridPool StratumRace remote vantage collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stratum-race
+Group=stratum-race
+WorkingDirectory=/opt/stratum-race
+EnvironmentFile=/etc/gridpool-stratum-race/agent.env
+Environment=STRATUMRACE_SV2_OBSERVER=/opt/stratum-race/sv2-observer/target/release/sv2-observer
+Environment=STR_RACE_STATE_FILE=/var/lib/gridpool-stratum-race/collector-state.json
+ExecStart=/opt/stratum-race/.venv/bin/python collector/str_race.py --pool-config /etc/gridpool-stratum-race/pools.json --pool-group gridpool-study --vantage ${STRATUMRACE_VANTAGE} --gridpool-url http://127.0.0.1:5000 --post-url https://race.gridpool.net/api/ingest/races
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gridpool-stratum-race
+
+[Install]
+WantedBy=multi-user.target
+

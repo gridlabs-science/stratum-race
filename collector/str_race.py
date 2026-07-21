@@ -39,6 +39,7 @@ import statistics
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
@@ -72,7 +73,7 @@ DEFAULT_BASELINE_TIMEOUT = 120.0
 BLOCK_MINER_LOOKUP_TIMEOUT = 8.0
 MEMPOOL_API_BASE = "https://mempool.space/api"
 
-CLIENT_VERSION = "stratum-race/0.5"
+CLIENT_VERSION = "stratum-race-gridpool/0.6"
 
 # POST retry constants
 POST_TIMEOUT = 5.0           # Must complete within 5 seconds of race confirmation
@@ -229,6 +230,9 @@ class PoolConfig:
     name: str
     host: str
     port: int
+    protocol: str = "sv1"
+    authority_pubkey: Optional[str] = None
+    cohort: str = "public-reference"
 
 
 @dataclass
@@ -237,6 +241,8 @@ class PoolState:
     host: str
     port: int
     user: str
+    protocol: str = "sv1"
+    cohort: str = "public-reference"
 
     connected: bool = False
     current_prevhash: Optional[str] = None
@@ -462,6 +468,7 @@ class RaceTracker:
         clean: bool,
         pools: Dict[str, PoolState],
         empty: bool = False,
+        opaque: bool = False,
     ) -> None:
         pool = pools[pool_name]
         pool.notify_total += 1
@@ -496,6 +503,7 @@ class RaceTracker:
                 and pool_name in race.arrivals
                 and pool_name not in race.nonempty_arrivals
                 and not empty
+                and not opaque
             ):
                 race.nonempty_arrivals[pool_name] = recv_ts
                 # Console output: show full-template perspective only.
@@ -535,13 +543,13 @@ class RaceTracker:
                 race.arrival_wall[pool_name] = local_iso()
                 if empty:
                     race.empty_first.add(pool_name)
-                else:
+                elif not opaque:
                     race.nonempty_arrivals[pool_name] = recv_ts
                 # Console output: full-template perspective only.
                 # If this pool arrived with an empty template, suppress output
                 # (it will print when the full template arrives). If full, show
                 # delay relative to the first full template in this race.
-                if not empty:
+                if not empty and not opaque:
                     if race.nonempty_arrivals and len(race.nonempty_arrivals) > 1:
                         base = min(race.nonempty_arrivals.values())
                         delay = ms(recv_ts - base)
@@ -600,7 +608,7 @@ class RaceTracker:
         race.arrival_wall[pool_name] = race.first_wall
         if empty:
             race.empty_first.add(pool_name)
-        else:
+        elif not opaque:
             race.nonempty_arrivals[pool_name] = recv_ts
 
         self.active[prevhash] = race
@@ -609,7 +617,7 @@ class RaceTracker:
         # Console output: only announce race start for full templates.
         # If the starter sent an empty template, the announcement is deferred
         # until the first full template arrives (handled above).
-        if not empty:
+        if not empty and not opaque:
             _print(pool_name, f"OBSERVED block start {prevhash} (height resolved post-run)")
 
     def _quorum_baseline(
@@ -1170,6 +1178,8 @@ def pool_summary_dict(p: PoolState) -> Dict[str, Any]:
         "name": p.name,
         "host": p.host,
         "port": p.port,
+        "protocol": p.protocol,
+        "cohort": p.cohort,
         "excluded_at_baseline": p.excluded_at_baseline,
         "exclude_reason": p.exclude_reason,
         "auth_failed": p.auth_failed,
@@ -1683,6 +1693,106 @@ async def pool_worker(
             await asyncio.sleep(RECONNECT_DELAY)
 
 
+async def sv2_pool_worker(
+    config: PoolConfig,
+    user: str,
+    tracker: RaceTracker,
+    pools: Dict[str, PoolState],
+    stop_event: asyncio.Event,
+) -> None:
+    """Supervise the native SV2 observer and normalize its JSONL events."""
+    pool = pools[config.name]
+    helper = os.environ.get(
+        "STRATUMRACE_SV2_OBSERVER",
+        str(Path(__file__).parent.parent / "sv2-observer" / "target" / "release" / "sv2-observer"),
+    )
+
+    while not stop_event.is_set():
+        process = None
+        established = False
+        try:
+            pool.connect_attempts += 1
+            command = [
+                helper,
+                "--host", config.host,
+                "--port", str(config.port),
+                "--user", user,
+            ]
+            if config.authority_pubkey:
+                command.extend(["--authority-pubkey", config.authority_pubkey])
+
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            established = True
+            pool.connected = True
+            pool.connections += 1
+            pool.connected_at_wall = local_iso()
+            pool.current_prevhash = None
+            pool.eligible = False
+            _print(config.name, "SV2 observer connected")
+
+            assert process.stdout is not None
+            while not stop_event.is_set():
+                try:
+                    line = await asyncio.wait_for(process.stdout.readline(), timeout=READ_TIMEOUT)
+                except asyncio.TimeoutError:
+                    raise ReconnectSession("read_timeout")
+                recv_ts = loop_time()
+                if not line:
+                    stderr = ""
+                    if process.stderr is not None:
+                        stderr = (await process.stderr.read()).decode(errors="replace").strip()
+                    raise ReconnectSession(stderr or "remote_closed")
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    pool.parse_errors += 1
+                    continue
+                if event.get("event") == "connected":
+                    continue
+                if event.get("event") != "set_new_prev_hash":
+                    continue
+                prevhash = str(event.get("prevhash", "")).lower()
+                if len(prevhash) != 64:
+                    pool.bad_notify += 1
+                    continue
+                tracker.handle_notify(
+                    pool_name=config.name,
+                    recv_ts=recv_ts,
+                    prevhash=prevhash,
+                    clean=True,
+                    pools=pools,
+                    # Standard Channels intentionally hide transaction count.
+                    empty=False,
+                    opaque=True,
+                )
+
+        except ReconnectSession as e:
+            if not stop_event.is_set():
+                pool.record_reconnect(e.reason)
+                _print(config.name, f"SV2 observer reconnect: {e.reason}")
+        except (FileNotFoundError, OSError) as e:
+            pool.connect_errors += 1
+            _print(config.name, f"SV2 observer unavailable: {e}")
+        finally:
+            pool.reset_connection_state()
+            if process is not None and process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+
+        if established and not stop_event.is_set():
+            await asyncio.sleep(RECONNECT_DELAY)
+        elif not stop_event.is_set():
+            await asyncio.sleep(min(30, RECONNECT_DELAY * 2))
+
+
 HEARTBEAT_INTERVAL = 300.0  # 5 minutes
 
 # ---------------------------------------------------------------------------
@@ -1862,6 +1972,7 @@ async def heartbeat_loop(
         heartbeat_payload = {
             "type": "heartbeat",
             "vantage": vantage,
+            "collector_version": CLIENT_VERSION,
             "timestamp_utc": utc_iso(),
             "connected_pools": connected_count,
             "eligible_pools": eligible_count,
@@ -2029,6 +2140,9 @@ def _load_central_pool_config(config_path: str, pool_group: str) -> List[PoolCon
                         name=str(entry["name"]),
                         host=str(entry["host"]),
                         port=int(entry["port"]),
+                        protocol=str(entry.get("protocol", "sv1")).lower(),
+                        authority_pubkey=entry.get("authority_pubkey"),
+                        cohort=str(entry.get("cohort", "public-reference")),
                     )
                 )
             except (KeyError, ValueError) as e:
@@ -2104,12 +2218,87 @@ def _build_race_result(
         "eligible_at_start": sorted(race.eligible_at_start),
         "pools_connected": sum(1 for p in pools.values() if p.connected),
         "pools_eligible": len(race.eligible_at_start),
+        "pool_protocols": {name: pool.protocol for name, pool in pools.items()},
+        "pool_cohorts": {name: pool.cohort for name, pool in pools.items()},
+        "template_observability": {
+            name: ("opaque" if pool.protocol == "sv2" else "sv1-merkle-branch")
+            for name, pool in pools.items()
+        },
         "collector_meta": {
             "version": CLIENT_VERSION,
             "uptime_seconds": int(time.time() - start_time),
             "session_races": session_races,
         },
     }
+
+
+def _fetch_gridpool_events_blocking(base_url: str, event_type: str) -> List[Dict[str, Any]]:
+    url = (
+        f"{base_url.rstrip('/')}/api/network/events"
+        f"?window=1h&limit=5000&eventType={urllib.parse.quote(event_type)}"
+    )
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=5.0) as response:
+        payload = json.loads(response.read())
+    return payload.get("events", []) if isinstance(payload, dict) else []
+
+
+def _parse_utc_epoch_ms(value: Any) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp() * 1000.0
+    except (TypeError, ValueError):
+        return None
+
+
+async def _gridpool_tip_correlation(
+    race: Race,
+    base_url: str,
+) -> Dict[str, Any]:
+    """Correlate miner-facing work with receiver-local GridPool tip events."""
+    loop = asyncio.get_running_loop()
+    try:
+        local_events, peer_events = await asyncio.gather(
+            loop.run_in_executor(None, _fetch_gridpool_events_blocking, base_url, "local-chain-tip-header"),
+            loop.run_in_executor(None, _fetch_gridpool_events_blocking, base_url, "peer-chain-tip"),
+        )
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+    target = race.prevhash.lower()
+    local_matches = [event for event in local_events if str(event.get("blockHash", "")).lower() == target]
+    peer_matches = [event for event in peer_events if str(event.get("blockHash", "")).lower() == target]
+
+    def earliest(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        candidates = [(event, _parse_utc_epoch_ms(event.get("timestampUtc"))) for event in events]
+        candidates = [(event, epoch) for event, epoch in candidates if epoch is not None]
+        if not candidates:
+            return None
+        event, epoch = min(candidates, key=lambda item: item[1])
+        return {"timestamp_utc": event.get("timestampUtc"), "epoch_ms": epoch, "transport": event.get("transport"), "source": event.get("source") or event.get("remoteEndpoint")}
+
+    local = earliest(local_matches)
+    peer = earliest(peer_matches)
+    arrivals_epoch_ms = {
+        name: race.first_epoch * 1000.0 + ms(arrival - race.first_ts)
+        for name, arrival in race.arrivals.items()
+    }
+    result: Dict[str, Any] = {
+        "available": bool(local or peer),
+        "local_zmq": local,
+        "first_peer_header": peer,
+        "work_arrival_epoch_ms": arrivals_epoch_ms,
+    }
+    if local:
+        result["local_zmq_to_work_ms"] = {
+            name: epoch - local["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
+        }
+    if peer:
+        result["peer_header_to_work_ms"] = {
+            name: epoch - peer["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
+        }
+    if local and peer:
+        result["peer_lead_vs_local_zmq_ms"] = local["epoch_ms"] - peer["epoch_ms"]
+    return result
 
 
 def _write_dead_letter(race_result: Dict[str, Any]) -> None:
@@ -2222,7 +2411,11 @@ async def _enrich_and_build(
                 f"{race.prevhash[:16]}...: {e}",
                 flush=True,
             )
-    return _build_race_result(race, pools, args, start_time, session_races)
+    result = _build_race_result(race, pools, args, start_time, session_races)
+    gridpool_url = getattr(args, "gridpool_url", None)
+    if gridpool_url:
+        result["gridpool_chain_tip"] = await _gridpool_tip_correlation(race, gridpool_url)
+    return result
 
 
 async def post_race_result(
@@ -2429,6 +2622,9 @@ def load_pool_configs(pools_path: Optional[str], pool_config: Optional[str] = No
                         name=str(item["name"]),
                         host=str(item["host"]),
                         port=int(item["port"]),
+                        protocol=str(item.get("protocol", "sv1")).lower(),
+                        authority_pubkey=item.get("authority_pubkey"),
+                        cohort=str(item.get("cohort", "public-reference")),
                     )
                 )
             except KeyError as e:
@@ -2471,7 +2667,14 @@ async def run(args: argparse.Namespace, race_sink=None, stop_event=None) -> None
         pool_group=getattr(args, "pool_group", "all"),
     )
     pools = {
-        pc.name: PoolState(name=pc.name, host=pc.host, port=pc.port, user=args.user)
+        pc.name: PoolState(
+            name=pc.name,
+            host=pc.host,
+            port=pc.port,
+            user=args.user,
+            protocol=pc.protocol,
+            cohort=pc.cohort,
+        )
         for pc in pool_configs
     }
 
@@ -2527,10 +2730,14 @@ async def run(args: argparse.Namespace, race_sink=None, stop_event=None) -> None
 
     start_epoch = time.time()
 
-    tasks = [
-        asyncio.create_task(pool_worker(pc.name, pc.host, pc.port, args.user, tracker, pools, stop_event))
-        for pc in pool_configs
-    ]
+    tasks = []
+    for pc in pool_configs:
+        worker = (
+            sv2_pool_worker(pc, args.user, tracker, pools, stop_event)
+            if pc.protocol == "sv2"
+            else pool_worker(pc.name, pc.host, pc.port, args.user, tracker, pools, stop_event)
+        )
+        tasks.append(asyncio.create_task(worker))
     tasks.append(asyncio.create_task(housekeeping(tracker, pools, stop_event, args, start_epoch, race_sink=race_sink)))
 
     # Start heartbeat POST loop only if post_url is configured
@@ -2633,6 +2840,7 @@ def main() -> None:
     parser.add_argument("--post-url", help="URL of the Ingest API endpoint for POSTing race results")
     parser.add_argument("--api-key", help="API key for ingest authentication (or set STRATUMRACE_API_KEY env var)")
     parser.add_argument("--vantage", help="Vantage point label (e.g., 'local')")
+    parser.add_argument("--gridpool-url", help="Optional local GridPool API URL for chain-tip correlation")
     parser.add_argument("--local-dir", help="Write race results to local filesystem at this directory path")
     parser.add_argument("--pool-config", help="S3 URI (s3://bucket/key) or local file path for pool configuration")
     parser.add_argument("--pool-group", default="all", help="Pool group tag filter (default: 'all')")

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "updated_utc": "2026-07-21T00:00:00Z",
+  "pools": [
+    {
+      "name": "local_datum",
+      "display_name": "Local DATUM",
+      "host": "127.0.0.1",
+      "port": 23334,
+      "protocol": "sv1",
+      "cohort": "gridpool-local",
+      "operator": "Local operator",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study"]
+    },
+    {
+      "name": "ocean",
+      "display_name": "OCEAN",
+      "host": "mine.ocean.xyz",
+      "port": 3334,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "OCEAN",
+      "pool_type": "shared",
+      "groups": ["all", "gridpool-study"]
+    },
+    {
+      "name": "atlaspool",
+      "display_name": "AtlasPool",
+      "host": "solo.atlaspool.io",
+      "port": 3333,
+      "protocol": "sv1",
+      "cohort": "public-reference",
+      "operator": "AtlasPool",
+      "pool_type": "solo",
+      "groups": ["all", "gridpool-study"]
+    }
+  ]
+}
+

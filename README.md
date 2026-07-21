@@ -2,6 +2,11 @@
 
 Measure Bitcoin mining pool block notification speed. StratumRace connects to mining pools via the Stratum protocol, observes block transitions in real-time, and measures which pools notify miners fastest.
 
+> Grid Labs fork: this branch adds native Stratum V2 Standard Channel timing,
+> GridPool chain-tip correlation, and authenticated multi-vantage ingestion.
+> See [docs/gridpool-deployment.md](docs/gridpool-deployment.md). Existing SV1
+> configurations remain compatible.
+
 You can run it two ways:
 - **Command-line mode** — Terminal output only. Minimal dependencies (just Python).
 - **Dashboard mode** — Local web UI with leaderboards, charts, and real-time updates.

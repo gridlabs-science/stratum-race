@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, List
@@ -38,6 +39,7 @@ class LocalStorage:
         self.data_dir = Path(data_dir)
         self.api_dir = self.data_dir / "api"
         self.pool_config = pool_config or []
+        self._write_lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Initial file creation (R3.9, R1.6)
@@ -102,6 +104,11 @@ class LocalStorage:
         On failure writing recent-blocks or latest, logs the error and
         preserves existing content.
         """
+        with self._write_lock:
+            self._write_race_locked(race_result)
+
+    def _write_race_locked(self, race_result: dict) -> None:
+        """Write one race while holding the process-local storage lock."""
         # Determine file path: api/races/YYYY/MM/DD/<height>-<vantage>.json
         first_epoch = race_result.get("first_epoch", 0)
         dt = datetime.fromtimestamp(first_epoch, tz=timezone.utc)
@@ -147,6 +154,26 @@ class LocalStorage:
             logger.exception(
                 "Failed to update vantages.json; preserving existing content"
             )
+
+    def update_vantage_heartbeat(self, vantage: str, heartbeat: dict) -> None:
+        """Persist authenticated remote collector health without trusting its label."""
+        with self._write_lock:
+            status_path = self.api_dir / "status" / "vantages.json"
+            try:
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                status = {"vantages": {}}
+            status.setdefault("vantages", {})
+            entry = status["vantages"].setdefault(vantage, {})
+            entry.update({
+                "status": "online",
+                "last_heartbeat_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "connected_pools": int(heartbeat.get("connected_pools", 0)),
+                "eligible_pools": int(heartbeat.get("eligible_pools", 0)),
+                "collector_version": str(heartbeat.get("collector_version", "unknown")),
+                "clock_synchronized": heartbeat.get("clock_synchronized"),
+            })
+            self._atomic_write(status_path, status)
 
     def _update_recent_blocks(self, race_result: dict) -> None:
         """Update recent-blocks.json: dedup by height+vantage, prepend, cap 55."""

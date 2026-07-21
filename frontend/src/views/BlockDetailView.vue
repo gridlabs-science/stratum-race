@@ -129,6 +129,7 @@ interface TimelineEntry {
   vantageIndex: number
   vantageName: string
   isFullTemplate: boolean
+  isOpaque: boolean
 }
 
 interface TimelineRow {
@@ -170,20 +171,23 @@ const timelineRows = computed<TimelineRow[]>(() => {
           vantageIndex: vi,
           vantageName: (race as any).vantage,
           isFullTemplate: true,
+          isOpaque: false,
         })
       }
 
       // Any-template offset (may differ from full if empty-first)
       const anyOffsets = (race as any).arrivals_offset_ms || {}
       const anyOffset = anyOffsets[poolName]
-      if (anyOffset != null && isEmptyFirst) {
-        // Show the earlier empty arrival as a separate marker
+      const isOpaque = (race as any).template_observability?.[poolName] === 'opaque'
+      if (anyOffset != null && (isEmptyFirst || (isOpaque && fullOffset == null))) {
+        // Show an earlier empty arrival or miner-usable opaque SV2 job.
         entries.push({
           offset: anyOffset,
-          isEmptyFirst: true,
+          isEmptyFirst,
           vantageIndex: vi,
           vantageName: (race as any).vantage,
           isFullTemplate: false,
+          isOpaque,
         })
       }
 
@@ -203,10 +207,10 @@ const timelineRows = computed<TimelineRow[]>(() => {
     })
   }
 
-  // Sort rows by their earliest full-template offset
+  // Sort rows by their earliest miner-usable/full-template offset.
   rows.sort((a, b) => {
-    const aMin = a.entries.find((e) => e.isFullTemplate)?.offset ?? Infinity
-    const bMin = b.entries.find((e) => e.isFullTemplate)?.offset ?? Infinity
+    const aMin = Math.min(...a.entries.map((entry) => entry.offset), Infinity)
+    const bMin = Math.min(...b.entries.map((entry) => entry.offset), Infinity)
     return aMin - bMin
   })
 
@@ -248,6 +252,13 @@ const formattedTime = computed(() => {
   const epoch = race.first_epoch ?? race.epoch
   return epoch ? formatTimestamp(epoch) : '—'
 })
+
+const gridPoolCorrelations = computed(() => fullRaces.value
+  .filter((race) => race.gridpool_chain_tip?.available)
+  .map((race) => ({
+    vantage: race.vantage,
+    peerLead: race.gridpool_chain_tip?.peer_lead_vs_local_zmq_ms,
+  })))
 
 function goBack() {
   router.push({ name: 'recent-blocks' })
@@ -339,6 +350,22 @@ function markerPosition(offset: number): string {
           <span class="legend-marker hollow"></span>
           Empty (first)
         </span>
+        <span class="legend-item">
+          <span class="legend-marker opaque"></span>
+          SV2 usable job (transaction set opaque)
+        </span>
+      </div>
+
+      <div v-if="gridPoolCorrelations.length" class="tip-correlation">
+        <strong>GridPool chain-tip correlation</strong>
+        <span v-for="item in gridPoolCorrelations" :key="item.vantage">
+          {{ formatVantage(item.vantage) }}:
+          <template v-if="item.peerLead != null">
+            peer header {{ item.peerLead >= 0 ? 'led' : 'trailed' }} local ZMQ by
+            {{ Math.abs(item.peerLead).toFixed(1) }} ms
+          </template>
+          <template v-else>no matched peer/local pair</template>
+        </span>
       </div>
 
       <!-- Timeline visualization -->
@@ -369,20 +396,22 @@ function markerPosition(offset: number): string {
                   class="timeline-marker"
                   :class="{
                     'marker-full': entry.isFullTemplate,
-                    'marker-empty': !entry.isFullTemplate,
+                    'marker-empty': entry.isEmptyFirst,
+                    'marker-opaque': entry.isOpaque,
                   }"
                   :style="{
                     left: markerPosition(entry.offset),
                     borderColor: getVantageColor(entry.vantageName),
-                    backgroundColor: entry.isFullTemplate
+                    backgroundColor: entry.isFullTemplate || entry.isOpaque
                       ? getVantageColor(entry.vantageName)
                       : 'transparent',
                   }"
-                  :title="`${entry.vantageName}: ${entry.offset.toFixed(1)} ms${entry.isEmptyFirst ? ' (empty)' : ''}`"
+                    :title="`${entry.vantageName}: ${entry.offset.toFixed(1)} ms${entry.isEmptyFirst ? ' (empty)' : entry.isOpaque ? ' (SV2 usable; transaction set opaque)' : ''}`"
                 >
                   <span class="marker-label">
                     {{ entry.offset.toFixed(1) }}
                     <span v-if="entry.isEmptyFirst" class="empty-label">empty</span>
+                    <span v-if="entry.isOpaque" class="empty-label">SV2</span>
                   </span>
                 </div>
               </div>
@@ -392,7 +421,7 @@ function markerPosition(offset: number): string {
               <strong>{{ row.displayName }}</strong>
               <span v-if="row.isWinner" class="tooltip-winner"> 🏆 Winner</span>
               <div v-for="entry in row.entries" :key="`tip-${entry.vantageIndex}-${entry.isFullTemplate}`" class="tooltip-line">
-                <span class="tooltip-type">{{ entry.isFullTemplate ? '▪ Full' : '▫ Empty' }}</span>
+                <span class="tooltip-type">{{ entry.isFullTemplate ? '▪ Full' : entry.isOpaque ? '◆ SV2 usable' : '▫ Empty' }}</span>
                 <span class="tooltip-vantage">{{ formatVantage(entry.vantageName) }}</span>
                 <span class="tooltip-ms">{{ entry.offset.toFixed(1) }} ms</span>
               </div>
@@ -552,6 +581,28 @@ function markerPosition(offset: number): string {
 .legend-marker.hollow {
   background-color: transparent;
   border: 2px solid var(--warning);
+}
+
+.legend-marker.opaque {
+  background-color: var(--accent);
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.tip-correlation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.tip-correlation strong {
+  color: var(--text-primary);
 }
 
 /* Timeline section */

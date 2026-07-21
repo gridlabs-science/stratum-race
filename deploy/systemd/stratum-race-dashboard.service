@@ -1,0 +1,24 @@
+[Unit]
+Description=GridPool StratumRace dashboard and Main collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stratum-race
+Group=stratum-race
+WorkingDirectory=/opt/stratum-race
+Environment=STRATUMRACE_SV2_OBSERVER=/opt/stratum-race/sv2-observer/target/release/sv2-observer
+Environment=STR_RACE_STATE_FILE=/var/lib/gridpool-stratum-race/collector-state.json
+ExecStart=/opt/stratum-race/.venv/bin/python -m standalone.main --host 127.0.0.1 --port 8080 --data-dir /var/lib/gridpool-stratum-race --pools /opt/stratum-race/config/gridpool-main.json --pool-group gridpool-study --vantage main-dc --gridpool-url http://127.0.0.1:5000 --ingest-tokens-file /etc/gridpool-stratum-race/ingest-tokens.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gridpool-stratum-race
+
+[Install]
+WantedBy=multi-user.target
+

@@ -45,9 +45,28 @@
             "maximum": 65535,
             "description": "Stratum endpoint port number"
           },
+          "protocol": {
+            "type": "string",
+            "enum": ["sv1", "sv2"],
+            "default": "sv1",
+            "description": "Mining protocol spoken by the endpoint"
+          },
+          "authority_pubkey": {
+            "type": "string",
+            "description": "SV2 Noise authority public key; required for authenticated SV2"
+          },
+          "cohort": {
+            "type": "string",
+            "description": "Reporting cohort, for example gridpool-local or public-reference"
+          },
           "operator": {
             "type": "string",
             "description": "Optional operator name for filter grouping (informational only, not used for ranking)"
+          },
+          "pool_type": {
+            "type": "string",
+            "enum": ["shared", "solo", "UNSURE"],
+            "description": "Existing StratumRace classification used by frontend filters"
           },
           "groups": {
             "type": "array",

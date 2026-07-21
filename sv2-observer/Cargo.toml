@@ -1,0 +1,14 @@
+[package]
+name = "sv2-observer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Minimal native Stratum V2 Standard Channel timing observer"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+hex = "0.4"
+serde_json = "1"
+stratum-apps = { version = "0.6.0", features = ["network"] }
+tokio = { version = "1.44", features = ["full"] }
+

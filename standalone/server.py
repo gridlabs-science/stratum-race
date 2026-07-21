@@ -9,10 +9,11 @@ aggregator share one asyncio event loop.
 """
 
 import asyncio
+import hmac
 import json
 import logging
 from pathlib import Path
-from typing import Set
+from typing import Dict, Optional, Set
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -43,6 +44,9 @@ class StandaloneServer:
         host: str = "0.0.0.0",
         port: int = 8080,
         vantage: str = "local",
+        storage=None,
+        aggregation_trigger=None,
+        ingest_tokens: Optional[Dict[str, str]] = None,
     ):
         if not (1 <= port <= 65535):
             raise ValueError(f"Port must be between 1 and 65535, got {port}")
@@ -52,6 +56,10 @@ class StandaloneServer:
         self.host = host
         self.port = port
         self.vantage = vantage
+        self.storage = storage
+        self.aggregation_trigger = aggregation_trigger
+        self.ingest_tokens = ingest_tokens or {}
+        self._ingest_lock = asyncio.Lock()
         self.ws_clients: Set[WebSocket] = set()
         self._app = self._build_app()
 
@@ -59,6 +67,8 @@ class StandaloneServer:
         """Build the Starlette application with all routes."""
         routes = [
             Route("/healthz", endpoint=self._healthz, methods=["GET"]),
+            Route("/api/ingest/races", endpoint=self._ingest_race, methods=["POST"]),
+            Route("/api/ingest/heartbeat", endpoint=self._ingest_heartbeat, methods=["POST"]),
             Route(
                 "/api/config/runtime.json",
                 endpoint=self._runtime_config,
@@ -112,11 +122,70 @@ class StandaloneServer:
         """Health check endpoint."""
         return JSONResponse({"status": "ok"})
 
+    def _authenticated_vantage(self, request: Request) -> Optional[str]:
+        header = request.headers.get("authorization", "")
+        supplied = header[7:] if header.startswith("Bearer ") else request.headers.get("x-api-key", "")
+        for token, vantage in self.ingest_tokens.items():
+            if hmac.compare_digest(supplied, token):
+                return vantage
+        return None
+
+    async def _read_ingest_json(self, request: Request) -> tuple[Optional[dict], Optional[JSONResponse]]:
+        if request.headers.get("content-length"):
+            try:
+                if int(request.headers["content-length"]) > 262_144:
+                    return None, JSONResponse({"error": "Payload too large"}, status_code=413)
+            except ValueError:
+                return None, JSONResponse({"error": "Invalid content length"}, status_code=400)
+        try:
+            body = await request.body()
+            if len(body) > 262_144:
+                return None, JSONResponse({"error": "Payload too large"}, status_code=413)
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None, JSONResponse({"error": "Invalid JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return None, JSONResponse({"error": "Expected an object"}, status_code=400)
+        return payload, None
+
+    async def _ingest_race(self, request: Request) -> JSONResponse:
+        vantage = self._authenticated_vantage(request)
+        if vantage is None or self.storage is None:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        payload, error = await self._read_ingest_json(request)
+        if error is not None:
+            return error
+        assert payload is not None
+        required = {"version", "prevhash", "first_epoch", "arrivals_offset_ms"}
+        if not required.issubset(payload) or len(str(payload.get("prevhash", ""))) != 64:
+            return JSONResponse({"error": "Invalid race payload"}, status_code=400)
+        payload["vantage"] = vantage
+        loop = asyncio.get_running_loop()
+        async with self._ingest_lock:
+            await loop.run_in_executor(None, self.storage.write_race, payload)
+        await self.broadcast(payload)
+        if self.aggregation_trigger is not None:
+            self.aggregation_trigger.set()
+        return JSONResponse({"status": "accepted", "vantage": vantage}, status_code=202)
+
+    async def _ingest_heartbeat(self, request: Request) -> JSONResponse:
+        vantage = self._authenticated_vantage(request)
+        if vantage is None or self.storage is None:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        payload, error = await self._read_ingest_json(request)
+        if error is not None:
+            return error
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.storage.update_vantage_heartbeat, vantage, payload or {})
+        return JSONResponse({"status": "accepted", "vantage": vantage}, status_code=202)
+
     async def _runtime_config(self, request: Request) -> JSONResponse:
         """Generate runtime.json dynamically from the request Host header."""
         host_header = request.headers.get("host", f"localhost:{self.port}")
         # Build WebSocket URL from the host header
-        ws_url = f"ws://{host_header}/ws"
+        forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        ws_scheme = "wss" if forwarded_proto == "https" else "ws"
+        ws_url = f"{ws_scheme}://{host_header}/ws"
 
         config = {
             "websocket_url": ws_url,
