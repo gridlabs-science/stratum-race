@@ -38,8 +38,20 @@ export interface RaceResult {
   gridpool_chain_tip?: {
     available: boolean
     peer_lead_vs_local_zmq_ms?: number
+    peer_lead_vs_local_node_ms?: number
     local_zmq_to_work_ms?: Record<string, number>
+    local_node_to_work_ms?: Record<string, number>
     peer_header_to_work_ms?: Record<string, number>
+    first_work_epoch_ms?: number
+    timeline?: Array<{
+      kind: 'peer-header' | 'local-node' | 'snapshot' | 'relay-dispatch'
+      label: string
+      timestamp_utc: string
+      epoch_ms: number
+      offset_from_first_work_ms: number
+      transport?: string
+      source?: string
+    }>
   }
   collector_meta: CollectorMeta
 }

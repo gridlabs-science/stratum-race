@@ -153,6 +153,102 @@ class TestEnrichAndBuild:
         assert result["block_height"] == 800000
 
 
+class TestGridPoolTipCorrelation:
+    def test_parses_dotnet_seven_digit_timestamp(self):
+        assert str_race._parse_utc_epoch_ms("2026-07-21T23:45:06.0586822Z") == pytest.approx(
+            1784677506058.682,
+            abs=0.001,
+        )
+
+    @pytest.mark.asyncio
+    async def test_builds_local_event_timeline_and_gateway_deltas(self):
+        block_hash = "ab" * 32
+        race = MagicMock()
+        race.prevhash = block_hash
+        race.first_epoch = 1000.0
+        race.first_ts = 50.0
+        race.arrivals = {"public": 50.0, "local": 50.4}
+
+        events = {
+            "local-chain-tip-header": [{
+                "blockHash": block_hash,
+                "timestampUtc": "1970-01-01T00:16:40.250Z",
+                "transport": "bitcoin-zmq-rawblock",
+                "source": "zmq-rawblock",
+            }],
+            "peer-chain-tip": [{
+                "blockHash": block_hash,
+                "timestampUtc": "1970-01-01T00:16:40.100Z",
+                "transport": "udp",
+                "source": "peer-a",
+            }],
+            "payout-snapshot": [{
+                "blockHash": block_hash,
+                "timestampUtc": "1970-01-01T00:16:40.300Z",
+            }],
+            "chain-tip-relay-dispatch": [{
+                "blockHash": block_hash,
+                "timestampUtc": "1970-01-01T00:16:40.320Z",
+                "transport": "concurrent",
+            }],
+        }
+
+        with patch.object(
+            str_race,
+            "_fetch_gridpool_events_blocking",
+            side_effect=lambda _url, event_type: events[event_type],
+        ):
+            result = await str_race._gridpool_tip_correlation(
+                race,
+                "http://gridpool.test",
+                attempts=1,
+            )
+
+        assert result["available"] is True
+        assert result["peer_lead_vs_local_node_ms"] == pytest.approx(150.0)
+        assert result["local_node_to_work_ms"]["local"] == pytest.approx(150.0)
+        assert [event["kind"] for event in result["timeline"]] == [
+            "peer-header",
+            "local-node",
+            "snapshot",
+            "relay-dispatch",
+        ]
+        assert result["timeline"][0]["offset_from_first_work_ms"] == pytest.approx(100.0)
+
+    @pytest.mark.asyncio
+    async def test_retries_when_events_are_not_yet_visible(self):
+        block_hash = "cd" * 32
+        race = MagicMock(
+            prevhash=block_hash,
+            first_epoch=1000.0,
+            first_ts=10.0,
+            arrivals={"pool": 10.0},
+        )
+        calls = {"local-chain-tip-header": 0}
+
+        def fetch(_url, event_type):
+            if event_type != "local-chain-tip-header":
+                return []
+            calls[event_type] += 1
+            if calls[event_type] == 1:
+                return []
+            return [{
+                "blockHash": block_hash,
+                "timestampUtc": "1970-01-01T00:16:40.100Z",
+            }]
+
+        with patch.object(str_race, "_fetch_gridpool_events_blocking", side_effect=fetch):
+            result = await str_race._gridpool_tip_correlation(
+                race,
+                "http://gridpool.test",
+                attempts=2,
+                retry_delay_s=0,
+            )
+
+        assert calls["local-chain-tip-header"] == 2
+        assert result["available"] is True
+
+
 class TestHybridMode:
     """Test that both --post-url and --local-dir can run independently."""
 

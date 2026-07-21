@@ -33,6 +33,7 @@ import csv
 import json
 import os
 import platform
+import re
 import secrets
 import signal
 import statistics
@@ -2249,7 +2250,10 @@ def _fetch_gridpool_events_blocking(base_url: str, event_type: str) -> List[Dict
 
 def _parse_utc_epoch_ms(value: Any) -> Optional[float]:
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp() * 1000.0
+        normalized = str(value).replace("Z", "+00:00")
+        # .NET timestamps use seven fractional digits; Python datetime accepts six.
+        normalized = re.sub(r"(\.\d{6})\d+(?=[+-]\d{2}:\d{2}$)", r"\1", normalized)
+        return datetime.fromisoformat(normalized).timestamp() * 1000.0
     except (TypeError, ValueError):
         return None
 
@@ -2257,20 +2261,44 @@ def _parse_utc_epoch_ms(value: Any) -> Optional[float]:
 async def _gridpool_tip_correlation(
     race: Race,
     base_url: str,
+    attempts: int = 4,
+    retry_delay_s: float = 2.5,
 ) -> Dict[str, Any]:
     """Correlate miner-facing work with receiver-local GridPool tip events."""
-    loop = asyncio.get_running_loop()
-    try:
-        local_events, peer_events = await asyncio.gather(
-            loop.run_in_executor(None, _fetch_gridpool_events_blocking, base_url, "local-chain-tip-header"),
-            loop.run_in_executor(None, _fetch_gridpool_events_blocking, base_url, "peer-chain-tip"),
-        )
-    except Exception as exc:
-        return {"available": False, "error": str(exc)}
-
     target = race.prevhash.lower()
-    local_matches = [event for event in local_events if str(event.get("blockHash", "")).lower() == target]
-    peer_matches = [event for event in peer_events if str(event.get("blockHash", "")).lower() == target]
+    event_types = (
+        "local-chain-tip-header",
+        "peer-chain-tip",
+        "payout-snapshot",
+        "chain-tip-relay-dispatch",
+    )
+    matching: Dict[str, List[Dict[str, Any]]] = {event_type: [] for event_type in event_types}
+    error: Optional[str] = None
+    loop = asyncio.get_running_loop()
+
+    # GridPool records and exposes telemetry asynchronously from miner-facing work.
+    # Retry briefly so a race finalized near that boundary does not permanently lose
+    # its local-node correlation due to an API visibility race.
+    for attempt in range(max(1, attempts)):
+        try:
+            for event_type in event_types:
+                events = await loop.run_in_executor(
+                    None,
+                    _fetch_gridpool_events_blocking,
+                    base_url,
+                    event_type,
+                )
+                matching[event_type] = [
+                    event for event in events
+                    if str(event.get("blockHash", "")).lower() == target
+                ]
+            error = None
+            if matching["local-chain-tip-header"] or matching["peer-chain-tip"]:
+                break
+        except Exception as exc:
+            error = str(exc)
+        if attempt + 1 < max(1, attempts):
+            await asyncio.sleep(retry_delay_s)
 
     def earliest(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         candidates = [(event, _parse_utc_epoch_ms(event.get("timestampUtc"))) for event in events]
@@ -2280,28 +2308,57 @@ async def _gridpool_tip_correlation(
         event, epoch = min(candidates, key=lambda item: item[1])
         return {"timestamp_utc": event.get("timestampUtc"), "epoch_ms": epoch, "transport": event.get("transport"), "source": event.get("source") or event.get("remoteEndpoint")}
 
-    local = earliest(local_matches)
-    peer = earliest(peer_matches)
+    local = earliest(matching["local-chain-tip-header"])
+    peer = earliest(matching["peer-chain-tip"])
+    snapshot = earliest(matching["payout-snapshot"])
+    dispatch = earliest(matching["chain-tip-relay-dispatch"])
     arrivals_epoch_ms = {
         name: race.first_epoch * 1000.0 + ms(arrival - race.first_ts)
         for name, arrival in race.arrivals.items()
     }
+    first_work_epoch_ms = min(arrivals_epoch_ms.values(), default=race.first_epoch * 1000.0)
+
+    timeline = []
+    for kind, label, event in (
+        ("peer-header", "First GridPool peer header", peer),
+        ("local-node", "Local Bitcoin node", local),
+        ("snapshot", "GridPool payout snapshot", snapshot),
+        ("relay-dispatch", "GridPool relay dispatch", dispatch),
+    ):
+        if event:
+            timeline.append({
+                "kind": kind,
+                "label": label,
+                **event,
+                "offset_from_first_work_ms": event["epoch_ms"] - first_work_epoch_ms,
+            })
+    timeline.sort(key=lambda item: item["epoch_ms"])
+
     result: Dict[str, Any] = {
-        "available": bool(local or peer),
+        "available": bool(timeline),
         "local_zmq": local,
+        "local_node": local,
         "first_peer_header": peer,
+        "payout_snapshot": snapshot,
+        "relay_dispatch": dispatch,
         "work_arrival_epoch_ms": arrivals_epoch_ms,
+        "first_work_epoch_ms": first_work_epoch_ms,
+        "timeline": timeline,
     }
+    if error:
+        result["error"] = error
     if local:
         result["local_zmq_to_work_ms"] = {
             name: epoch - local["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
         }
+        result["local_node_to_work_ms"] = result["local_zmq_to_work_ms"]
     if peer:
         result["peer_header_to_work_ms"] = {
             name: epoch - peer["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
         }
     if local and peer:
         result["peer_lead_vs_local_zmq_ms"] = local["epoch_ms"] - peer["epoch_ms"]
+        result["peer_lead_vs_local_node_ms"] = result["peer_lead_vs_local_zmq_ms"]
     return result
 
 

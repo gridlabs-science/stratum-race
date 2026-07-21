@@ -257,8 +257,21 @@ const gridPoolCorrelations = computed(() => fullRaces.value
   .filter((race) => race.gridpool_chain_tip?.available)
   .map((race) => ({
     vantage: race.vantage,
-    peerLead: race.gridpool_chain_tip?.peer_lead_vs_local_zmq_ms,
+    peerLead: race.gridpool_chain_tip?.peer_lead_vs_local_node_ms
+      ?? race.gridpool_chain_tip?.peer_lead_vs_local_zmq_ms,
+    events: race.gridpool_chain_tip?.timeline ?? [],
+    localWork: Object.entries(race.gridpool_chain_tip?.local_node_to_work_ms
+      ?? race.gridpool_chain_tip?.local_zmq_to_work_ms
+      ?? {})
+      .filter(([pool]) => race.pool_cohorts?.[pool] === 'gridpool-local')
+      .sort(([, a], [, b]) => a - b)
+      .map(([pool, delay]) => ({ pool, delay })),
   })))
+
+function signedMs(value: number): string {
+  if (Math.abs(value) < 0.05) return '0.0 ms'
+  return `${value > 0 ? '+' : '−'}${Math.abs(value).toFixed(1)} ms`
+}
 
 function goBack() {
   router.push({ name: 'recent-blocks' })
@@ -356,17 +369,45 @@ function markerPosition(offset: number): string {
         </span>
       </div>
 
-      <div v-if="gridPoolCorrelations.length" class="tip-correlation">
-        <strong>GridPool chain-tip correlation</strong>
-        <span v-for="item in gridPoolCorrelations" :key="item.vantage">
-          {{ formatVantage(item.vantage) }}:
-          <template v-if="item.peerLead != null">
-            peer header {{ item.peerLead >= 0 ? 'led' : 'trailed' }} local ZMQ by
-            {{ Math.abs(item.peerLead).toFixed(1) }} ms
-          </template>
-          <template v-else>no matched peer/local pair</template>
-        </span>
-      </div>
+      <section v-if="gridPoolCorrelations.length" class="tip-correlation" aria-label="Local chain event timeline">
+        <div class="tip-heading">
+          <div>
+            <strong>Local chain event timeline</strong>
+            <p>Offsets use the first miner-facing work notice in this race as 0 ms.</p>
+          </div>
+          <span class="measurement-badge">Measured</span>
+        </div>
+        <div v-for="item in gridPoolCorrelations" :key="item.vantage" class="tip-vantage">
+          <h3>{{ formatVantage(item.vantage) }}</h3>
+          <div class="event-grid">
+            <div v-for="event in item.events" :key="`${event.kind}-${event.timestamp_utc}`" class="event-card">
+              <span class="event-label">{{ event.label }}</span>
+              <strong :class="{ early: event.offset_from_first_work_ms < 0 }">
+                {{ signedMs(event.offset_from_first_work_ms) }}
+              </strong>
+              <small>{{ event.transport || event.source || 'local event' }}</small>
+            </div>
+          </div>
+          <div v-if="item.localWork.length" class="local-work-list">
+            <span class="event-label">Local gateways after Bitcoin-node notification</span>
+            <span v-for="work in item.localWork" :key="work.pool" class="work-chip">
+              {{ store.displayName(work.pool) }} <strong>{{ signedMs(work.delay) }}</strong>
+            </span>
+          </div>
+          <p class="tip-interpretation">
+            <template v-if="item.peerLead != null && item.peerLead > 0">
+              A GridPool peer header arrived {{ item.peerLead.toFixed(1) }} ms before the local node.
+              That is measured notification lead, not saved mining time: peer headers do not yet activate templates.
+            </template>
+            <template v-else-if="item.peerLead != null">
+              The local node led the first GridPool peer header by {{ Math.abs(item.peerLead).toFixed(1) }} ms.
+            </template>
+            <template v-else>
+              No matching peer header was observed for this block; local node and snapshot timing are still shown.
+            </template>
+          </p>
+        </div>
+      </section>
 
       <!-- Timeline visualization -->
       <section class="timeline-section" aria-label="Race timeline">
@@ -590,19 +631,107 @@ function markerPosition(offset: number): string {
 }
 
 .tip-correlation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.25rem;
-  padding: 0.75rem 1rem;
+  padding: 1rem;
   margin-bottom: 0.75rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
+  background: var(--surface);
   color: var(--text-secondary);
   font-size: 0.8125rem;
 }
 
-.tip-correlation strong {
+.tip-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.875rem;
+}
+
+.tip-heading p,
+.tip-interpretation {
+  margin: 0.2rem 0 0;
+}
+
+.tip-heading strong,
+.tip-vantage h3,
+.event-card strong,
+.work-chip strong {
   color: var(--text-primary);
+}
+
+.measurement-badge {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tip-vantage h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+}
+
+.event-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 0.5rem;
+}
+
+.event-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--surface-elevated);
+}
+
+.event-card strong,
+.work-chip strong {
+  font-family: var(--font-mono);
+}
+
+.event-card strong.early {
+  color: var(--accent);
+}
+
+.event-card small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.local-work-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.work-chip {
+  padding: 0.25rem 0.45rem;
+  border-radius: 0.25rem;
+  background: var(--surface-elevated);
+}
+
+.tip-interpretation {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.75rem;
+  line-height: 1.45;
 }
 
 /* Timeline section */
