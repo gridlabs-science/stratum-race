@@ -1736,10 +1736,11 @@ async def sv2_pool_worker(
 
             assert process.stdout is not None
             while not stop_event.is_set():
-                try:
-                    line = await asyncio.wait_for(process.stdout.readline(), timeout=READ_TIMEOUT)
-                except asyncio.TimeoutError:
-                    raise ReconnectSession("read_timeout")
+                # Standard Channel servers may legitimately stay silent for an
+                # entire inter-block interval. Shutdown cancellation bounds this
+                # read; an SV1-style inactivity timeout would create churn and
+                # race-window eligibility gaps every three minutes.
+                line = await process.stdout.readline()
                 recv_ts = loop_time()
                 if not line:
                     stderr = ""
@@ -2001,9 +2002,12 @@ async def housekeeping(
     pools: Dict[str, PoolState],
     stop_event: asyncio.Event,
     args: argparse.Namespace,
-    start_time: float,
+    start_epoch: float,
     race_sink=None,
+    start_monotonic: Optional[float] = None,
 ) -> None:
+    if start_monotonic is None:
+        start_monotonic = loop_time()
     last_heartbeat = loop_time()
     session_races = 0
 
@@ -2021,17 +2025,17 @@ async def housekeeping(
         for race in closed_confirmed:
             session_races += 1
             _spawn_background(
-                _process_confirmed_race(race, pools, args, start_time, session_races, race_sink)
+                _process_confirmed_race(race, pools, args, start_epoch, session_races, race_sink)
             )
 
         # Save state after every confirmed race for crash recovery
         if closed_confirmed:
-            save_state(pools, tracker, start_time=start_time)
+            save_state(pools, tracker, start_time=start_monotonic)
 
         now = loop_time()
         if tracker.tracking_enabled and (now - last_heartbeat) >= HEARTBEAT_INTERVAL:
             last_heartbeat = now
-            uptime_s = int(now - start_time)
+            uptime_s = int(now - start_monotonic)
             h, rem = divmod(uptime_s, 3600)
             m, _ = divmod(rem, 60)
             confirmed = sum(1 for r in tracker.all_races if r.confirmed)
@@ -2729,6 +2733,7 @@ async def run(args: argparse.Namespace, race_sink=None, stop_event=None) -> None
     print()
 
     start_epoch = time.time()
+    start_monotonic = loop_time()
 
     tasks = []
     for pc in pool_configs:
@@ -2738,7 +2743,15 @@ async def run(args: argparse.Namespace, race_sink=None, stop_event=None) -> None
             else pool_worker(pc.name, pc.host, pc.port, args.user, tracker, pools, stop_event)
         )
         tasks.append(asyncio.create_task(worker))
-    tasks.append(asyncio.create_task(housekeeping(tracker, pools, stop_event, args, start_epoch, race_sink=race_sink)))
+    tasks.append(asyncio.create_task(housekeeping(
+        tracker,
+        pools,
+        stop_event,
+        args,
+        start_epoch,
+        race_sink=race_sink,
+        start_monotonic=start_monotonic,
+    )))
 
     # Start heartbeat POST loop only if post_url is configured
     if getattr(args, "post_url", None):
@@ -2758,8 +2771,8 @@ async def run(args: argparse.Namespace, race_sink=None, stop_event=None) -> None
         pass
     finally:
         stop_event.set()
-        # Workers may be parked in readline() up to READ_TIMEOUT; give them a short
-        # grace to exit cleanly, then cancel the stragglers so shutdown is bounded.
+        # Workers may be parked in readline(); give them a short grace to exit
+        # cleanly, then cancel the stragglers so shutdown is bounded.
         _, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE)
         for t in pending:
             t.cancel()
