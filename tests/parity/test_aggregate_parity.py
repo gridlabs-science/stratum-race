@@ -151,6 +151,8 @@ def _load_s3_backend_class():
     _handler_path = (
         Path(__file__).parent.parent.parent / "lambda" / "aggregate" / "handler.py"
     )
+    if not _handler_path.exists():
+        pytest.skip("optional AWS Lambda aggregate backend is not included in this fork")
     spec = importlib.util.spec_from_file_location(
         "aggregate_handler", str(_handler_path)
     )

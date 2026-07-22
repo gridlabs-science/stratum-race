@@ -11,7 +11,9 @@ use stratum_apps::{
         common_messages_sv2::{Protocol, SetupConnection},
         framing_sv2::framing::Sv2Frame,
         mining_sv2::OpenStandardMiningChannel,
-        parsers_sv2::{parse_message_frame_with_tlvs, AnyMessage, CommonMessages, IsSv2Message, Mining},
+        parsers_sv2::{
+            parse_message_frame_with_tlvs, AnyMessage, CommonMessages, IsSv2Message, Mining,
+        },
     },
 };
 use tokio::net::TcpStream;
@@ -37,7 +39,9 @@ fn frame(message: AnyMessage<'static>) -> Result<StandardEitherFrame<AnyMessage<
     ))
 }
 
-fn parse_frame(frame: &mut StandardEitherFrame<AnyMessage<'static>>) -> Result<AnyMessage<'static>, String> {
+fn parse_frame(
+    frame: &mut StandardEitherFrame<AnyMessage<'static>>,
+) -> Result<AnyMessage<'static>, String> {
     let StandardEitherFrame::Sv2(sv2) = frame else {
         return Err("unexpected handshake frame".to_string());
     };
@@ -59,7 +63,9 @@ async fn main() -> Result<(), String> {
     let address: SocketAddr = resolve_host_port(&format!("{}:{}", args.host, args.port))
         .await
         .map_err(|error| error.to_string())?;
-    let stream = TcpStream::connect(address).await.map_err(|error| error.to_string())?;
+    let stream = TcpStream::connect(address)
+        .await
+        .map_err(|error| error.to_string())?;
     let authority = args
         .authority_pubkey
         .as_deref()
@@ -76,17 +82,35 @@ async fn main() -> Result<(), String> {
         min_version: 2,
         max_version: 2,
         flags: 1, // Require Standard Channel jobs so timing reflects miner-visible work.
-        endpoint_host: args.host.clone().try_into().map_err(|error| format!("{error:?}"))?,
+        endpoint_host: args
+            .host
+            .clone()
+            .try_into()
+            .map_err(|error| format!("{error:?}"))?,
         endpoint_port: args.port,
-        vendor: "gridlabs-science".try_into().map_err(|error| format!("{error:?}"))?,
-        hardware_version: "stratum-race".try_into().map_err(|error| format!("{error:?}"))?,
-        firmware: "sv2-observer/0.1".try_into().map_err(|error| format!("{error:?}"))?,
-        device_id: "timing-probe".try_into().map_err(|error| format!("{error:?}"))?,
+        vendor: "gridlabs-science"
+            .try_into()
+            .map_err(|error| format!("{error:?}"))?,
+        hardware_version: "stratum-race"
+            .try_into()
+            .map_err(|error| format!("{error:?}"))?,
+        firmware: "sv2-observer/0.1"
+            .try_into()
+            .map_err(|error| format!("{error:?}"))?,
+        device_id: "timing-probe"
+            .try_into()
+            .map_err(|error| format!("{error:?}"))?,
     }));
-    writer.write_frame(frame(setup)?).await.map_err(|error| error.to_string())?;
+    writer
+        .write_frame(frame(setup)?)
+        .await
+        .map_err(|error| error.to_string())?;
 
     loop {
-        let mut incoming = reader.read_frame().await.map_err(|error| error.to_string())?;
+        let mut incoming = reader
+            .read_frame()
+            .await
+            .map_err(|error| error.to_string())?;
         match parse_frame(&mut incoming)? {
             AnyMessage::Common(CommonMessages::SetupConnectionSuccess(_)) => break,
             AnyMessage::Common(CommonMessages::SetupConnectionError(error)) => {
@@ -101,14 +125,22 @@ async fn main() -> Result<(), String> {
             request_id: 1u32.into(),
             user_identity: args.user.try_into().map_err(|error| format!("{error:?}"))?,
             nominal_hash_rate: 1.0,
-            max_target: vec![0xff; 32].try_into().map_err(|error| format!("{error:?}"))?,
+            max_target: vec![0xff; 32]
+                .try_into()
+                .map_err(|error| format!("{error:?}"))?,
         },
     ));
-    writer.write_frame(frame(open)?).await.map_err(|error| error.to_string())?;
+    writer
+        .write_frame(frame(open)?)
+        .await
+        .map_err(|error| error.to_string())?;
     println!("{}", json!({"event": "connected", "protocol": "sv2"}));
 
     loop {
-        let mut incoming = reader.read_frame().await.map_err(|error| error.to_string())?;
+        let mut incoming = reader
+            .read_frame()
+            .await
+            .map_err(|error| error.to_string())?;
         if let AnyMessage::Mining(Mining::SetNewPrevHash(message)) = parse_frame(&mut incoming)? {
             println!(
                 "{}",
