@@ -37,6 +37,11 @@ export interface RaceResult {
   template_observability?: Record<string, 'opaque' | 'sv1-merkle-branch'>
   gridpool_chain_tip?: {
     available: boolean
+    local_node?: ChainTipEvent | null
+    local_zmq?: ChainTipEvent | null
+    first_peer_header?: ChainTipEvent | null
+    payout_snapshot?: ChainTipEvent | null
+    relay_dispatch?: ChainTipEvent | null
     peer_lead_vs_local_zmq_ms?: number
     peer_lead_vs_local_node_ms?: number
     local_zmq_to_work_ms?: Record<string, number>
@@ -54,6 +59,13 @@ export interface RaceResult {
     }>
   }
   collector_meta: CollectorMeta
+}
+
+export interface ChainTipEvent {
+  timestamp_utc: string
+  epoch_ms: number
+  transport?: string
+  source?: string
 }
 
 /** Per-pool statistics within an aggregate (combined or per-vantage) */

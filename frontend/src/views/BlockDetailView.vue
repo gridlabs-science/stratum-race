@@ -5,6 +5,8 @@ import { useRaceStore } from '@/stores/raceStore'
 import { useTimezone } from '@/composables/useTimezone'
 import { useVantageNames } from '@/composables/useVantageNames'
 import type { RaceResult, RecentBlock } from '@/types'
+import { buildUnifiedTimeline } from '@/utils/blockTimeline'
+import type { UnifiedTimelineMarker, UnifiedVantageTimeline } from '@/utils/blockTimeline'
 
 const route = useRoute()
 const router = useRouter()
@@ -91,130 +93,15 @@ const races = computed(() => fullRaces.value.length > 0 ? fullRaces.value : rece
 /** Primary race data (first match or null) */
 const primaryRace = computed(() => races.value[0] ?? null)
 
-/** Whether this block has data from multiple vantage points */
-const hasMultipleVantages = computed(() => races.value.length > 1)
+const unifiedTimelines = computed(() => fullRaces.value.map(buildUnifiedTimeline))
 
-/** All unique vantage points for this block (sorted for deterministic color assignment) */
-const vantagePoints = computed(() => [...new Set(races.value.map((r: any) => r.vantage))].sort())
-
-/** Fixed color palette for vantage points (assigned by sorted name, always consistent) */
-const VANTAGE_COLORS = ['var(--accent)', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6']
-
-function getVantageColor(vantage: string): string {
-  const idx = vantagePoints.value.indexOf(vantage)
-  return VANTAGE_COLORS[idx >= 0 ? idx : 0] ?? 'var(--text-secondary)'
-}
-
-/** Maximum offset across all races to scale the timeline */
-const maxOffset = computed(() => {
-  let max = 0
-  for (const race of races.value) {
-    const offsets: number[] = Object.values((race as any).nonempty_arrivals_offset_ms || {}) as number[]
-    const anyOffsets: number[] = Object.values((race as any).arrivals_offset_ms || {}) as number[]
-    const allValues = [...offsets, ...anyOffsets]
-    if (allValues.length > 0) {
-      max = Math.max(max, ...allValues)
-    }
-  }
-  return max || 1 // Avoid division by zero
-})
-
-/**
- * Build timeline rows: one per pool, with entries for each vantage point.
- * Each entry has the offset, whether it's empty-first, and the vantage index.
- */
-interface TimelineEntry {
-  offset: number
-  isEmptyFirst: boolean
-  vantageIndex: number
-  vantageName: string
-  isFullTemplate: boolean
-  isOpaque: boolean
-}
-
-interface TimelineRow {
-  poolName: string
-  displayName: string
-  entries: TimelineEntry[]
-  isWinner: boolean
-}
-
-const timelineRows = computed<TimelineRow[]>(() => {
-  // Collect all pools across all races
-  const poolSet = new Set<string>()
-  for (const race of races.value) {
-    for (const pool of Object.keys((race as any).arrivals_offset_ms || {})) {
-      poolSet.add(pool)
-    }
-    for (const pool of Object.keys((race as any).nonempty_arrivals_offset_ms || {})) {
-      poolSet.add(pool)
-    }
-  }
-
-  const rows: TimelineRow[] = []
-
-  for (const poolName of poolSet) {
-    const entries: TimelineEntry[] = []
-    let isWinner = false
-
-    for (let vi = 0; vi < races.value.length; vi++) {
-      const race = races.value[vi]
-      const isEmptyFirst = ((race as any).empty_first_pools ?? []).includes(poolName)
-
-      // Full template offset (nonempty)
-      const fullOffsets = (race as any).nonempty_arrivals_offset_ms || {}
-      const fullOffset = fullOffsets[poolName]
-      if (fullOffset != null) {
-        entries.push({
-          offset: fullOffset,
-          isEmptyFirst: false,
-          vantageIndex: vi,
-          vantageName: (race as any).vantage,
-          isFullTemplate: true,
-          isOpaque: false,
-        })
-      }
-
-      // Any-template offset (may differ from full if empty-first)
-      const anyOffsets = (race as any).arrivals_offset_ms || {}
-      const anyOffset = anyOffsets[poolName]
-      const isOpaque = (race as any).template_observability?.[poolName] === 'opaque'
-      if (anyOffset != null && (isEmptyFirst || (isOpaque && fullOffset == null))) {
-        // Show an earlier empty arrival or miner-usable opaque SV2 job.
-        entries.push({
-          offset: anyOffset,
-          isEmptyFirst,
-          vantageIndex: vi,
-          vantageName: (race as any).vantage,
-          isFullTemplate: false,
-          isOpaque,
-        })
-      }
-
-      if ((race as any).winner_nonempty === poolName) {
-        isWinner = true
-      }
-    }
-
-    // Sort entries by offset for visual clarity
-    entries.sort((a, b) => a.offset - b.offset)
-
-    rows.push({
-      poolName,
-      displayName: store.displayName(poolName),
-      entries,
-      isWinner,
-    })
-  }
-
-  // Sort rows by their earliest miner-usable/full-template offset.
-  rows.sort((a, b) => {
-    const aMin = Math.min(...a.entries.map((entry) => entry.offset), Infinity)
-    const bMin = Math.min(...b.entries.map((entry) => entry.offset), Infinity)
-    return aMin - bMin
-  })
-
-  return rows
+const endpointCount = computed(() => {
+  const race = primaryRace.value as RaceResult | null
+  if (!race) return 0
+  return new Set([
+    ...Object.keys(race.pool_cohorts ?? {}),
+    ...Object.keys(race.arrivals_offset_ms ?? {}),
+  ]).size
 })
 
 /** Block metadata */
@@ -253,24 +140,9 @@ const formattedTime = computed(() => {
   return epoch ? formatTimestamp(epoch) : '—'
 })
 
-const gridPoolCorrelations = computed(() => fullRaces.value
-  .filter((race) => race.gridpool_chain_tip?.available)
-  .map((race) => ({
-    vantage: race.vantage,
-    peerLead: race.gridpool_chain_tip?.peer_lead_vs_local_node_ms
-      ?? race.gridpool_chain_tip?.peer_lead_vs_local_zmq_ms,
-    events: race.gridpool_chain_tip?.timeline ?? [],
-    localWork: Object.entries(race.gridpool_chain_tip?.local_node_to_work_ms
-      ?? race.gridpool_chain_tip?.local_zmq_to_work_ms
-      ?? {})
-      .filter(([pool]) => race.pool_cohorts?.[pool] === 'gridpool-local')
-      .sort(([, a], [, b]) => a - b)
-      .map(([pool, delay]) => ({ pool, delay })),
-  })))
-
-function signedMs(value: number): string {
-  if (Math.abs(value) < 0.05) return '0.0 ms'
-  return `${value > 0 ? '+' : '−'}${Math.abs(value).toFixed(1)} ms`
+function formatLatency(value: number): string {
+  if (value < 1000) return `${value.toFixed(1)} ms`
+  return `${(value / 1000).toFixed(3)} s`
 }
 
 function goBack() {
@@ -280,9 +152,30 @@ function goBack() {
 /**
  * Compute the left position percentage for a marker on the timeline bar.
  */
-function markerPosition(offset: number): string {
-  if (maxOffset.value === 0) return '0%'
-  return `${(offset / maxOffset.value) * 100}%`
+function markerPosition(marker: UnifiedTimelineMarker, timeline: UnifiedVantageTimeline): string {
+  return `${Math.min(100, Math.max(0, marker.offsetMs / timeline.durationMs * 100))}%`
+}
+
+function axisTicks(timeline: UnifiedVantageTimeline) {
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    ratio,
+    label: formatLatency(timeline.durationMs * ratio),
+  }))
+}
+
+function rowLabel(rowId: string, label: string): string {
+  return rowId.startsWith('endpoint-') ? store.displayName(label) : label
+}
+
+function markerTitle(marker: UnifiedTimelineMarker): string {
+  const details = [
+    marker.label,
+    formatLatency(marker.offsetMs),
+    new Date(marker.epochMs).toISOString(),
+    marker.transport,
+    marker.source,
+  ].filter(Boolean)
+  return details.join(' · ')
 }
 </script>
 
@@ -332,143 +225,82 @@ function markerPosition(offset: number): string {
           </div>
           <div class="meta-item">
             <span class="meta-label">Pools</span>
-            <span class="meta-value">{{ timelineRows.length }}</span>
+            <span class="meta-value">{{ endpointCount }}</span>
           </div>
         </div>
       </header>
 
-      <!-- Vantage point legend (when multiple) -->
-      <div v-if="hasMultipleVantages" class="vantage-legend">
-        <span class="legend-label">Vantage Points:</span>
-        <span
-          v-for="vp in vantagePoints"
-          :key="vp"
-          class="legend-item"
-        >
-          <span
-            class="legend-dot"
-            :style="{ backgroundColor: getVantageColor(vp) }"
-          ></span>
-          {{ formatVantage(vp) }}
+      <div class="marker-legend" aria-label="Timeline legend">
+        <span class="legend-item legend-public">Public endpoint</span>
+        <span class="legend-item legend-local">Local endpoint</span>
+        <span class="legend-item legend-protocol">Node / GridPool event</span>
+        <span class="legend-item">
+          <span class="legend-marker marker-full"></span>Final full work
+        </span>
+        <span class="legend-item">
+          <span class="legend-marker marker-empty"></span>Initial empty work
+        </span>
+        <span class="legend-item">
+          <span class="legend-marker marker-opaque"></span>SV2 usable job
         </span>
       </div>
 
-      <!-- Marker type legend -->
-      <div class="marker-legend">
-        <span class="legend-item">
-          <span class="legend-marker solid"></span>
-          Full Template
-        </span>
-        <span class="legend-item">
-          <span class="legend-marker hollow"></span>
-          Empty (first)
-        </span>
-        <span class="legend-item">
-          <span class="legend-marker opaque"></span>
-          SV2 usable job (transaction set opaque)
-        </span>
-      </div>
-
-      <section v-if="gridPoolCorrelations.length" class="tip-correlation" aria-label="Local chain event timeline">
-        <div class="tip-heading">
+      <section
+        v-for="timeline in unifiedTimelines"
+        :key="timeline.vantage"
+        class="timeline-section"
+        :aria-label="`${formatVantage(timeline.vantage)} complete event timeline`"
+      >
+        <header class="timeline-heading">
           <div>
-            <strong>Local chain event timeline</strong>
-            <p>Offsets use the first miner-facing work notice in this race as 0 ms.</p>
+            <span class="timeline-kicker">Complete event path</span>
+            <h3>{{ formatVantage(timeline.vantage) }}</h3>
           </div>
-          <span class="measurement-badge">Measured</span>
-        </div>
-        <div v-for="item in gridPoolCorrelations" :key="item.vantage" class="tip-vantage">
-          <h3>{{ formatVantage(item.vantage) }}</h3>
-          <div class="event-grid">
-            <div v-for="event in item.events" :key="`${event.kind}-${event.timestamp_utc}`" class="event-card">
-              <span class="event-label">{{ event.label }}</span>
-              <strong :class="{ early: event.offset_from_first_work_ms < 0 }">
-                {{ signedMs(event.offset_from_first_work_ms) }}
-              </strong>
-              <small>{{ event.transport || event.source || 'local event' }}</small>
-            </div>
+          <div class="timeline-range">
+            <strong>{{ formatLatency(timeline.durationMs) }}</strong>
+            <span>{{ new Date(timeline.startEpochMs).toISOString() }}</span>
           </div>
-          <div v-if="item.localWork.length" class="local-work-list">
-            <span class="event-label">Local gateways after Bitcoin-node notification</span>
-            <span v-for="work in item.localWork" :key="work.pool" class="work-chip">
-              {{ store.displayName(work.pool) }} <strong>{{ signedMs(work.delay) }}</strong>
-            </span>
-          </div>
-          <p class="tip-interpretation">
-            <template v-if="item.peerLead != null && item.peerLead > 0">
-              A GridPool peer header arrived {{ item.peerLead.toFixed(1) }} ms before the local node.
-              That is measured notification lead, not saved mining time: peer headers do not yet activate templates.
-            </template>
-            <template v-else-if="item.peerLead != null">
-              The local node led the first GridPool peer header by {{ Math.abs(item.peerLead).toFixed(1) }} ms.
-            </template>
-            <template v-else>
-              No matching peer header was observed for this block; local node and snapshot timing are still shown.
-            </template>
-          </p>
-        </div>
-      </section>
+        </header>
 
-      <!-- Timeline visualization -->
-      <section class="timeline-section" aria-label="Race timeline">
-        <!-- Timeline axis header -->
-        <div class="timeline-axis-header">
-          <span class="axis-label-start">0 ms</span>
-          <span class="axis-label-end">{{ maxOffset.toFixed(0) }} ms</span>
+        <div class="timeline-axis">
+          <span class="axis-origin">Earliest event</span>
+          <span
+            v-for="tick in axisTicks(timeline)"
+            :key="tick.ratio"
+            class="axis-tick"
+            :style="{ left: `${tick.ratio * 100}%` }"
+          >{{ tick.label }}</span>
         </div>
 
-        <!-- Pool rows -->
-        <div class="timeline-rows">
-          <div
-            v-for="row in timelineRows"
-            :key="row.poolName"
-            class="timeline-row"
-            :class="{ 'is-winner': row.isWinner }"
-          >
-            <div class="row-pool-name">
-              <span class="pool-display-name">{{ row.displayName }}</span>
-              <span v-if="row.isWinner" class="winner-badge">🏆</span>
+        <div v-for="group in timeline.groups" :key="group.category" class="timeline-group" :class="`group-${group.category}`">
+          <div class="group-heading">{{ group.label }}</div>
+          <div v-for="row in group.rows" :key="row.id" class="timeline-row" :class="[`row-${row.category}`, { 'row-missing': row.status === 'missing' }]">
+            <div class="row-identity">
+              <span class="row-name">{{ rowLabel(row.id, row.label) }}</span>
+              <span v-if="row.status === 'missing'" class="row-status">Not observed</span>
+              <span v-else class="row-status">{{ formatLatency(row.markers[row.markers.length - 1].offsetMs) }}</span>
             </div>
-            <div class="row-timeline-bar">
-              <div class="bar-track">
-                <div
-                  v-for="(entry, i) in row.entries"
-                  :key="i"
-                  class="timeline-marker"
-                  :class="{
-                    'marker-full': entry.isFullTemplate,
-                    'marker-empty': entry.isEmptyFirst,
-                    'marker-opaque': entry.isOpaque,
-                  }"
-                  :style="{
-                    left: markerPosition(entry.offset),
-                    borderColor: getVantageColor(entry.vantageName),
-                    backgroundColor: entry.isFullTemplate || entry.isOpaque
-                      ? getVantageColor(entry.vantageName)
-                      : 'transparent',
-                  }"
-                    :title="`${entry.vantageName}: ${entry.offset.toFixed(1)} ms${entry.isEmptyFirst ? ' (empty)' : entry.isOpaque ? ' (SV2 usable; transaction set opaque)' : ''}`"
-                >
-                  <span class="marker-label">
-                    {{ entry.offset.toFixed(1) }}
-                    <span v-if="entry.isEmptyFirst" class="empty-label">empty</span>
-                    <span v-if="entry.isOpaque" class="empty-label">SV2</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-            <!-- Custom hover tooltip -->
-            <div class="row-tooltip">
-              <strong>{{ row.displayName }}</strong>
-              <span v-if="row.isWinner" class="tooltip-winner"> 🏆 Winner</span>
-              <div v-for="entry in row.entries" :key="`tip-${entry.vantageIndex}-${entry.isFullTemplate}`" class="tooltip-line">
-                <span class="tooltip-type">{{ entry.isFullTemplate ? '▪ Full' : entry.isOpaque ? '◆ SV2 usable' : '▫ Empty' }}</span>
-                <span class="tooltip-vantage">{{ formatVantage(entry.vantageName) }}</span>
-                <span class="tooltip-ms">{{ entry.offset.toFixed(1) }} ms</span>
-              </div>
+            <div class="row-track">
+              <span class="track-line"></span>
+              <button
+                v-for="marker in row.markers"
+                :key="`${marker.kind}-${marker.epochMs}`"
+                type="button"
+                class="timeline-marker"
+                :class="`marker-${marker.kind}`"
+                :style="{ left: markerPosition(marker, timeline) }"
+                :title="markerTitle(marker)"
+                :aria-label="markerTitle(marker)"
+              >
+                <span class="marker-time">{{ formatLatency(marker.offsetMs) }}</span>
+              </button>
             </div>
           </div>
         </div>
+
+        <p class="timeline-note">
+          GridPool peer-header timing is measured notification lead only. Peer headers do not currently activate mining templates.
+        </p>
       </section>
     </template>
   </div>
@@ -578,21 +410,15 @@ function markerPosition(offset: number): string {
   color: var(--text-secondary);
 }
 
-/* Legends */
-.vantage-legend,
 .marker-legend {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
-  padding: 0.5rem 1rem;
+  gap: 0.5rem 1rem;
+  padding: 0.65rem 1rem;
   margin-bottom: 0.75rem;
   font-size: 0.8125rem;
   color: var(--text-secondary);
-}
-
-.legend-label {
-  font-weight: 600;
-  color: var(--text-primary);
 }
 
 .legend-item {
@@ -601,328 +427,267 @@ function markerPosition(offset: number): string {
   gap: 0.375rem;
 }
 
-.legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.legend-public,
+.legend-local,
+.legend-protocol {
+  padding-left: 0.55rem;
+  border-left: 3px solid;
 }
+
+.legend-public { border-color: #f59e0b; }
+.legend-local { border-color: #22c55e; }
+.legend-protocol { border-color: #38bdf8; }
 
 .legend-marker {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--accent);
   border-radius: 50%;
-  flex-shrink: 0;
 }
 
-.legend-marker.solid {
-  background-color: var(--accent);
+.legend-marker.marker-full {
+  background: var(--accent);
 }
 
-.legend-marker.hollow {
-  background-color: transparent;
-  border: 2px solid var(--warning);
+.legend-marker.marker-empty {
+  border-color: var(--warning);
+  background: transparent;
 }
 
-.legend-marker.opaque {
-  background-color: var(--accent);
+.legend-marker.marker-opaque {
+  border-radius: 1px;
   transform: rotate(45deg);
-  border-radius: 2px;
+  background: var(--accent);
 }
 
-.tip-correlation {
-  padding: 1rem;
-  margin-bottom: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-}
-
-.tip-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.875rem;
-}
-
-.tip-heading p,
-.tip-interpretation {
-  margin: 0.2rem 0 0;
-}
-
-.tip-heading strong,
-.tip-vantage h3,
-.event-card strong,
-.work-chip strong {
-  color: var(--text-primary);
-}
-
-.measurement-badge {
-  padding: 0.2rem 0.45rem;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  color: var(--accent);
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.tip-vantage h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.8rem;
-}
-
-.event-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
-  gap: 0.5rem;
-}
-
-.event-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
-  background: var(--surface-elevated);
-}
-
-.event-card strong,
-.work-chip strong {
-  font-family: var(--font-mono);
-}
-
-.event-card strong.early {
-  color: var(--accent);
-}
-
-.event-card small {
-  overflow: hidden;
-  color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.event-label {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.local-work-list {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.45rem;
-  margin-top: 0.75rem;
-}
-
-.work-chip {
-  padding: 0.25rem 0.45rem;
-  border-radius: 0.25rem;
-  background: var(--surface-elevated);
-}
-
-.tip-interpretation {
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-  margin-top: 0.75rem;
-  line-height: 1.45;
-}
-
-/* Timeline section */
 .timeline-section {
+  overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
+  margin-bottom: 1rem;
   padding: 1.25rem;
 }
 
-.timeline-axis-header {
+.timeline-heading {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 0 0 0.75rem 140px;
-  font-size: 0.6875rem;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 0.5rem;
+  min-width: 760px;
+  margin-bottom: 1.25rem;
 }
 
-/* Timeline rows */
-.timeline-rows {
+.timeline-heading h3 {
+  margin: 0.2rem 0 0;
+  color: var(--text-primary);
+  font-size: 1.05rem;
+}
+
+.timeline-kicker {
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.timeline-range {
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+.timeline-range strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.timeline-axis {
+  position: relative;
+  min-width: 760px;
+  height: 38px;
+  margin-left: 230px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  font-family: var(--font-mono);
+}
+
+.axis-origin {
+  position: absolute;
+  right: calc(100% + 16px);
+  top: -0.45rem;
+  width: 210px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.axis-tick {
+  position: absolute;
+  top: 0;
+  height: 13px;
+  padding-top: 16px;
+  transform: translateX(-50%);
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.axis-tick:last-child {
+  transform: translateX(-100%);
+}
+
+.timeline-group {
+  min-width: 990px;
+  margin-bottom: 0.8rem;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 0.35rem;
+  background: color-mix(in srgb, var(--surface-elevated) 45%, transparent);
+}
+
+.group-public { border-left-color: #f59e0b; }
+.group-protocol { border-left-color: #38bdf8; }
+.group-local { border-left-color: #22c55e; }
+.group-other { border-left-color: var(--text-secondary); }
+
+.group-heading {
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 .timeline-row {
   display: flex;
   align-items: center;
-  padding: 0.625rem 0;
+  min-height: 48px;
+  padding: 0 0.75rem;
   border-bottom: 1px solid var(--border);
-  transition: background-color 0.15s ease;
 }
 
 .timeline-row:last-child {
   border-bottom: none;
 }
 
-/* Custom hover tooltip */
-.timeline-row {
-  position: relative;
-}
-
-.row-tooltip {
-  display: none;
-  position: absolute;
-  left: 140px;
-  top: 100%;
-  z-index: 100;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
-  padding: 0.625rem 0.75rem;
-  font-size: 0.75rem;
-  white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
-}
-
-.timeline-row:hover .row-tooltip {
-  display: block;
-}
-
-.row-tooltip strong {
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-}
-
-.tooltip-winner {
-  color: var(--accent);
-  font-size: 0.75rem;
-}
-
-.tooltip-line {
+.row-identity {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.25rem;
+  flex-direction: column;
+  justify-content: center;
+  width: 215px;
+  flex-shrink: 0;
+  gap: 0.15rem;
+  padding-right: 1rem;
+}
+
+.row-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-status {
   color: var(--text-secondary);
   font-family: var(--font-mono);
+  font-size: 0.65rem;
 }
 
-.tooltip-type {
-  width: 50px;
-  flex-shrink: 0;
-}
-
-.tooltip-vantage {
-  width: 100px;
-  flex-shrink: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tooltip-ms {
-  font-weight: 600;
-  color: var(--text-primary);
-  text-align: right;
-  min-width: 60px;
-}
-
-.timeline-row.is-winner {
-  background: rgba(57, 135, 229, 0.06);
-  border-radius: 0.25rem;
-}
-
-.row-pool-name {
-  width: 140px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding-right: 0.75rem;
-}
-
-.pool-display-name {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.winner-badge {
-  font-size: 0.75rem;
-  flex-shrink: 0;
-}
-
-.row-timeline-bar {
+.row-track {
+  position: relative;
   flex: 1;
   min-width: 0;
+  height: 34px;
 }
 
-.bar-track {
-  position: relative;
-  height: 28px;
-  background: var(--surface-elevated);
-  border-radius: 0.25rem;
-  border: 1px solid var(--border);
-}
-
-/* Timeline markers */
-.timeline-marker {
+.track-line {
   position: absolute;
   top: 50%;
-  transform: translate(-50%, -50%);
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid;
-  z-index: 1;
-  cursor: default;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--border);
 }
 
-.timeline-marker.marker-full {
-  /* backgroundColor set inline by vantage color */
+.timeline-marker {
+  appearance: none;
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--accent);
+  cursor: help;
 }
+
+.row-public .timeline-marker { color: #f59e0b; }
+.row-local .timeline-marker { color: #22c55e; }
+.row-protocol .timeline-marker { color: #38bdf8; }
+.row-other .timeline-marker { color: var(--text-secondary); }
 
 .timeline-marker.marker-empty {
-  /* Hollow circle with border color from vantage */
-  background-color: transparent !important;
+  background: var(--surface);
 }
 
-.marker-label {
+.timeline-marker.marker-opaque {
+  border-radius: 2px;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.timeline-marker.marker-node,
+.timeline-marker.marker-snapshot,
+.timeline-marker.marker-relay {
+  border-radius: 3px;
+}
+
+.timeline-marker.marker-peer {
+  width: 15px;
+  height: 15px;
+  box-shadow: 0 0 0 4px rgb(56 189 248 / 18%);
+}
+
+.marker-time {
   position: absolute;
-  top: -20px;
+  top: -22px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 0.625rem;
-  font-family: var(--font-mono);
   color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
   white-space: nowrap;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.15s ease;
 }
 
-.timeline-marker:hover .marker-label {
-  opacity: 1;
+.timeline-marker.marker-opaque .marker-time {
+  transform: translateX(-50%) rotate(-45deg);
 }
 
-.empty-label {
-  display: inline-block;
-  margin-left: 0.25em;
-  font-style: italic;
-  color: var(--warning);
-  font-size: 0.5625rem;
+.row-missing .track-line {
+  opacity: 0.35;
+  background: repeating-linear-gradient(90deg, var(--border) 0 5px, transparent 5px 10px);
 }
 
-/* Responsive */
+.timeline-note {
+  min-width: 760px;
+  margin: 1rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
 @media (max-width: 768px) {
   .block-detail-view {
     padding: 1rem;
@@ -931,34 +696,11 @@ function markerPosition(offset: number): string {
   .metadata-grid {
     grid-template-columns: 1fr 1fr;
   }
-
-  .timeline-axis-header {
-    padding-left: 100px;
-  }
-
-  .row-pool-name {
-    width: 100px;
-    font-size: 0.75rem;
-  }
-
-  .vantage-legend,
-  .marker-legend {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
 }
 
 @media (max-width: 480px) {
   .metadata-grid {
     grid-template-columns: 1fr;
-  }
-
-  .timeline-axis-header {
-    padding-left: 80px;
-  }
-
-  .row-pool-name {
-    width: 80px;
   }
 }
 </style>
