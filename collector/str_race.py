@@ -2267,6 +2267,7 @@ async def _gridpool_tip_correlation(
     """Correlate miner-facing work with receiver-local GridPool tip events."""
     target = race.prevhash.lower()
     event_types = (
+        "local-chain-tip-notification",
         "local-chain-tip-header",
         "peer-chain-tip",
         "payout-snapshot",
@@ -2293,7 +2294,11 @@ async def _gridpool_tip_correlation(
                     if str(event.get("blockHash", "")).lower() == target
                 ]
             error = None
-            if matching["local-chain-tip-header"] or matching["peer-chain-tip"]:
+            if (
+                matching["local-chain-tip-notification"]
+                or matching["local-chain-tip-header"]
+                or matching["peer-chain-tip"]
+            ):
                 break
         except Exception as exc:
             error = str(exc)
@@ -2308,7 +2313,9 @@ async def _gridpool_tip_correlation(
         event, epoch = min(candidates, key=lambda item: item[1])
         return {"timestamp_utc": event.get("timestampUtc"), "epoch_ms": epoch, "transport": event.get("transport"), "source": event.get("source") or event.get("remoteEndpoint")}
 
-    local = earliest(matching["local-chain-tip-header"])
+    local_notification = earliest(matching["local-chain-tip-notification"])
+    local_header = earliest(matching["local-chain-tip-header"])
+    local = local_notification or local_header
     peer = earliest(matching["peer-chain-tip"])
     snapshot = earliest(matching["payout-snapshot"])
     dispatch = earliest(matching["chain-tip-relay-dispatch"])
@@ -2336,8 +2343,10 @@ async def _gridpool_tip_correlation(
 
     result: Dict[str, Any] = {
         "available": bool(timeline),
-        "local_zmq": local,
+        # Preserve local_zmq as the raw-header timestamp for existing reports.
+        "local_zmq": local_header,
         "local_node": local,
+        "local_header": local_header,
         "first_peer_header": peer,
         "payout_snapshot": snapshot,
         "relay_dispatch": dispatch,
@@ -2347,18 +2356,22 @@ async def _gridpool_tip_correlation(
     }
     if error:
         result["error"] = error
-    if local:
+    if local_header:
         result["local_zmq_to_work_ms"] = {
+            name: epoch - local_header["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
+        }
+    if local:
+        result["local_node_to_work_ms"] = {
             name: epoch - local["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
         }
-        result["local_node_to_work_ms"] = result["local_zmq_to_work_ms"]
     if peer:
         result["peer_header_to_work_ms"] = {
             name: epoch - peer["epoch_ms"] for name, epoch in arrivals_epoch_ms.items()
         }
+    if local_header and peer:
+        result["peer_lead_vs_local_zmq_ms"] = local_header["epoch_ms"] - peer["epoch_ms"]
     if local and peer:
-        result["peer_lead_vs_local_zmq_ms"] = local["epoch_ms"] - peer["epoch_ms"]
-        result["peer_lead_vs_local_node_ms"] = result["peer_lead_vs_local_zmq_ms"]
+        result["peer_lead_vs_local_node_ms"] = local["epoch_ms"] - peer["epoch_ms"]
     return result
 
 

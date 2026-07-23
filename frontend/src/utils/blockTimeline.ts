@@ -162,6 +162,11 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
       eventMarker(tip?.local_node ?? tip?.local_zmq, 'node', 'Local node notification'),
     ),
     protocolRow(
+      'protocol-local-header',
+      'Local raw block header available',
+      eventMarker(tip?.local_header, 'node', 'Raw header available'),
+    ),
+    protocolRow(
       'protocol-snapshot',
       'GridPool payout snapshot',
       eventMarker(tip?.payout_snapshot, 'snapshot', 'Snapshot activated'),

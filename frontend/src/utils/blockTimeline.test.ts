@@ -67,6 +67,11 @@ describe('buildUnifiedTimeline', () => {
         local_node: {
           timestamp_utc: '1970-01-01T00:16:40.100Z',
           epoch_ms: 1000100,
+          transport: 'bitcoin-zmq-hashblock',
+        },
+        local_header: {
+          timestamp_utc: '1970-01-01T00:16:40.105Z',
+          epoch_ms: 1000105,
           transport: 'bitcoin-zmq-rawblock',
         },
       },
@@ -106,7 +111,7 @@ describe('buildUnifiedTimeline', () => {
     const result = buildUnifiedTimeline(race())
     const protocol = result.groups.find((group) => group.category === 'protocol')!
 
-    expect(protocol.rows).toHaveLength(4)
+    expect(protocol.rows).toHaveLength(5)
     expect(protocol.rows.every((row) => row.status === 'missing')).toBe(true)
   })
 })

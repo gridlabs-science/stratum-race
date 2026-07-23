@@ -170,6 +170,12 @@ class TestGridPoolTipCorrelation:
         race.arrivals = {"public": 50.0, "local": 50.4}
 
         events = {
+            "local-chain-tip-notification": [{
+                "blockHash": block_hash,
+                "timestampUtc": "1970-01-01T00:16:40.200Z",
+                "transport": "bitcoin-zmq-hashblock",
+                "source": "zmq-hashblock",
+            }],
             "local-chain-tip-header": [{
                 "blockHash": block_hash,
                 "timestampUtc": "1970-01-01T00:16:40.250Z",
@@ -205,8 +211,12 @@ class TestGridPoolTipCorrelation:
             )
 
         assert result["available"] is True
-        assert result["peer_lead_vs_local_node_ms"] == pytest.approx(150.0)
-        assert result["local_node_to_work_ms"]["local"] == pytest.approx(150.0)
+        assert result["peer_lead_vs_local_node_ms"] == pytest.approx(100.0)
+        assert result["peer_lead_vs_local_zmq_ms"] == pytest.approx(150.0)
+        assert result["local_node_to_work_ms"]["local"] == pytest.approx(200.0)
+        assert result["local_zmq_to_work_ms"]["local"] == pytest.approx(150.0)
+        assert result["local_node"]["transport"] == "bitcoin-zmq-hashblock"
+        assert result["local_header"]["transport"] == "bitcoin-zmq-rawblock"
         assert [event["kind"] for event in result["timeline"]] == [
             "peer-header",
             "local-node",
@@ -224,10 +234,10 @@ class TestGridPoolTipCorrelation:
             first_ts=10.0,
             arrivals={"pool": 10.0},
         )
-        calls = {"local-chain-tip-header": 0}
+        calls = {"local-chain-tip-notification": 0}
 
         def fetch(_url, event_type):
-            if event_type != "local-chain-tip-header":
+            if event_type != "local-chain-tip-notification":
                 return []
             calls[event_type] += 1
             if calls[event_type] == 1:
@@ -245,7 +255,7 @@ class TestGridPoolTipCorrelation:
                 retry_delay_s=0,
             )
 
-        assert calls["local-chain-tip-header"] == 2
+        assert calls["local-chain-tip-notification"] == 2
         assert result["available"] is True
 
 

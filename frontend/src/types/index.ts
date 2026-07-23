@@ -39,6 +39,7 @@ export interface RaceResult {
     available: boolean
     local_node?: ChainTipEvent | null
     local_zmq?: ChainTipEvent | null
+    local_header?: ChainTipEvent | null
     first_peer_header?: ChainTipEvent | null
     payout_snapshot?: ChainTipEvent | null
     relay_dispatch?: ChainTipEvent | null
