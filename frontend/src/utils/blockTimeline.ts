@@ -1,7 +1,7 @@
 import type { ChainTipEvent, RaceResult } from '@/types'
 
 export type TimelineCategory = 'public' | 'protocol' | 'local' | 'other'
-export type TimelineMarkerKind = 'full' | 'empty' | 'opaque' | 'peer' | 'node' | 'snapshot' | 'relay'
+export type TimelineMarkerKind = 'full' | 'empty' | 'opaque' | 'peer' | 'node' | 'snapshot' | 'relay' | 'synthetic'
 
 export interface UnifiedTimelineMarker {
   kind: TimelineMarkerKind
@@ -91,6 +91,7 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
     ...Object.keys(race.nonempty_arrivals_offset_ms ?? {}),
   ])
   const firstEpochMs = race.first_epoch * 1000
+  const absoluteWorkArrivals = race.gridpool_chain_tip?.work_arrival_epoch_ms ?? {}
   const endpointRows: UnifiedTimelineRow[] = []
 
   for (const pool of endpointNames) {
@@ -101,12 +102,15 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
     const fullOffset = race.nonempty_arrivals_offset_ms?.[pool]
     const isEmptyFirst = race.empty_first_pools?.includes(pool) ?? false
     const markers: UnifiedTimelineMarker[] = []
+    const absoluteArrival = absoluteWorkArrivals[pool]
+    const arrivalEpochMs = (offset: number) =>
+      isFiniteNumber(absoluteArrival) ? absoluteArrival : firstEpochMs + offset
 
     if (isEmptyFirst && isFiniteNumber(anyOffset)) {
       markers.push({
         kind: 'empty',
         label: 'Initial empty work',
-        epochMs: firstEpochMs + anyOffset,
+        epochMs: arrivalEpochMs(anyOffset),
         offsetMs: 0,
       })
     }
@@ -114,7 +118,9 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
       markers.push({
         kind: 'full',
         label: 'Final full work',
-        epochMs: firstEpochMs + fullOffset,
+        epochMs: isFiniteNumber(absoluteArrival)
+          ? absoluteArrival + Math.max(0, fullOffset - (anyOffset ?? fullOffset))
+          : firstEpochMs + fullOffset,
         offsetMs: 0,
       })
     } else if (protocol === 'sv2' || observability === 'opaque') {
@@ -122,7 +128,7 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
         markers.push({
           kind: 'opaque',
           label: 'Miner-usable SV2 job (opaque)',
-          epochMs: firstEpochMs + anyOffset,
+          epochMs: arrivalEpochMs(anyOffset),
           offsetMs: 0,
         })
       }
@@ -130,7 +136,7 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
       markers.push({
         kind: 'full',
         label: 'Miner-facing work',
-        epochMs: firstEpochMs + anyOffset,
+        epochMs: arrivalEpochMs(anyOffset),
         offsetMs: 0,
       })
     }
@@ -150,11 +156,27 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
   }
 
   const tip = race.gridpool_chain_tip
+  const peerMarker = eventMarker(
+    tip?.first_peer_header,
+    'peer',
+    'Inbound peer header',
+  )
+  const fastestLocalRow = endpointRows
+    .filter((row) => row.category === 'local' && row.status === 'observed')
+    .sort((left, right) => left.sortEpochMs - right.sortEpochMs)[0]
+  const syntheticMarker = peerMarker && fastestLocalRow
+    ? {
+        ...peerMarker,
+        kind: 'synthetic' as const,
+        label: `Modeled ${fastestLocalRow.label} work at peer-tip arrival`,
+        source: fastestLocalRow.label,
+      }
+    : null
   const protocolRows = [
     protocolRow(
       'protocol-peer-header',
       'GridPool peer chain-tip notification',
-      eventMarker(tip?.first_peer_header, 'peer', 'Inbound peer header'),
+      peerMarker,
     ),
     protocolRow(
       'protocol-local-node',
@@ -175,6 +197,11 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
       'protocol-relay',
       'GridPool chain-tip relay dispatch',
       eventMarker(tip?.relay_dispatch, 'relay', 'UDP/WebSocket dispatch'),
+    ),
+    protocolRow(
+      'protocol-synthetic-fast-gridpool',
+      'Synthetic Fast GridPool',
+      syntheticMarker,
     ),
   ]
 
@@ -208,4 +235,26 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
     durationMs: Math.max(endEpochMs - startEpochMs, 1),
     groups,
   }
+}
+
+export function buildSynchronizedTimelines(races: RaceResult[]): UnifiedVantageTimeline[] {
+  const timelines = races.map(buildUnifiedTimeline)
+  const observed = timelines.filter((timeline) =>
+    timeline.groups.some((group) => group.rows.some((row) => row.markers.length > 0)),
+  )
+  if (observed.length === 0) return timelines
+
+  const globalStartEpochMs = Math.min(...observed.map((timeline) => timeline.startEpochMs))
+  const globalEndEpochMs = Math.max(...observed.map((timeline) => timeline.endEpochMs))
+  const durationMs = Math.max(globalEndEpochMs - globalStartEpochMs, 1)
+
+  for (const timeline of timelines) {
+    timeline.startEpochMs = globalStartEpochMs
+    timeline.endEpochMs = globalEndEpochMs
+    timeline.durationMs = durationMs
+    for (const marker of timeline.groups.flatMap((group) => group.rows.flatMap((row) => row.markers))) {
+      marker.offsetMs = marker.epochMs - globalStartEpochMs
+    }
+  }
+  return timelines
 }

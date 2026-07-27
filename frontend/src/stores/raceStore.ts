@@ -9,6 +9,7 @@ import type {
   TemplateMode,
   PoolTier,
   PoolAggregate,
+  GridPoolEventAggregate,
   TimeFrame,
 } from '@/types'
 
@@ -33,6 +34,7 @@ export const useRaceStore = defineStore('race', () => {
 
   /** Current pool stats keyed by pool name (from latest aggregate) */
   const leaderboardData = ref<Record<string, PoolAggregate>>({})
+  const gridpoolEventData = ref<Record<string, GridPoolEventAggregate>>({})
 
   /** Vantage point health statuses */
   const vantageHealth = ref<Record<string, VantageHealth>>({})
@@ -95,6 +97,13 @@ export const useRaceStore = defineStore('race', () => {
       return poolAgg.any_by_vantage[selectedVantage.value]
     }
     return poolAgg.by_vantage?.[selectedVantage.value] ?? null
+  }
+
+  function getGridPoolEventStats(eventName: string) {
+    const event = gridpoolEventData.value[eventName]
+    if (!event) return null
+    if (selectedVantage.value === 'combined') return event.combined
+    return event.by_vantage?.[selectedVantage.value] ?? null
   }
 
   /**
@@ -424,6 +433,7 @@ export const useRaceStore = defineStore('race', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
       leaderboardData.value = data.pools ?? {}
+      gridpoolEventData.value = data.gridpool_events ?? {}
       leaderboardFromRecent.value = false
       aggregateLastUpdated.value = data.generated_utc ?? null
       return true
@@ -520,6 +530,7 @@ export const useRaceStore = defineStore('race', () => {
     // State
     recentBlocks,
     leaderboardData,
+    gridpoolEventData,
     leaderboardFromRecent,
     vantageHealth,
     vantageDisplay,
@@ -535,6 +546,7 @@ export const useRaceStore = defineStore('race', () => {
 
     // Getters
     getPoolStats,
+    getGridPoolEventStats,
     sortedLeaderboard,
     filteredByTier,
     filteredByVantage,

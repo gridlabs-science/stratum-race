@@ -48,6 +48,7 @@ export interface RaceResult {
     local_zmq_to_work_ms?: Record<string, number>
     local_node_to_work_ms?: Record<string, number>
     peer_header_to_work_ms?: Record<string, number>
+    work_arrival_epoch_ms?: Record<string, number>
     first_work_epoch_ms?: number
     timeline?: Array<{
       kind: 'peer-header' | 'local-node' | 'snapshot' | 'relay-dispatch'
@@ -91,6 +92,22 @@ export interface PoolAggregate {
   any_by_vantage?: Record<string, PoolStats>
 }
 
+export interface GridPoolEventStats {
+  median_ms: number | null
+  avg_ms: number | null
+  p95_ms: number | null
+  observations: number
+  races_eligible: number
+  before_first_work_pct: number | null
+}
+
+export interface GridPoolEventAggregate {
+  label: string
+  synthetic: boolean
+  combined: GridPoolEventStats
+  by_vantage: Record<string, GridPoolEventStats>
+}
+
 /** Daily aggregate file structure (aggregates/daily/YYYY-MM-DD.json) */
 export interface DailyAggregate {
   date: string
@@ -98,6 +115,7 @@ export interface DailyAggregate {
   total_races: number
   vantage_points: string[]
   pools: Record<string, PoolAggregate>
+  gridpool_events?: Record<string, GridPoolEventAggregate>
 }
 
 /** Monthly aggregate file structure (aggregates/monthly/YYYY-MM.json) */

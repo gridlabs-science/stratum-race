@@ -5,6 +5,7 @@ import VantageSelector from '@/components/VantageSelector.vue'
 import TimeFrameFilter from '@/components/TimeFrameFilter.vue'
 import StatsCards from '@/components/StatsCards.vue'
 import LeaderboardTable from '@/components/LeaderboardTable.vue'
+import GridPoolEventTable from '@/components/GridPoolEventTable.vue'
 import { useRaceStore } from '@/stores/raceStore'
 import { useWebSocket } from '@/services/WebSocketManager'
 
@@ -67,6 +68,9 @@ const connectionText = computed(() => {
 
     <!-- Main leaderboard table -->
     <LeaderboardTable />
+
+    <!-- Node, GridPool, and explicitly modeled timing events -->
+    <GridPoolEventTable />
   </div>
 </template>
 

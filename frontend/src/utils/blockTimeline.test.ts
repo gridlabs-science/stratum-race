@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RaceResult } from '@/types'
-import { buildUnifiedTimeline } from './blockTimeline'
+import { buildSynchronizedTimelines, buildUnifiedTimeline } from './blockTimeline'
 
 function race(overrides: Partial<RaceResult> = {}): RaceResult {
   return {
@@ -111,7 +111,66 @@ describe('buildUnifiedTimeline', () => {
     const result = buildUnifiedTimeline(race())
     const protocol = result.groups.find((group) => group.category === 'protocol')!
 
-    expect(protocol.rows).toHaveLength(5)
+    expect(protocol.rows).toHaveLength(6)
     expect(protocol.rows.every((row) => row.status === 'missing')).toBe(true)
+  })
+
+  it('uses one wall-clock origin for parallel vantage timelines', () => {
+    const main = race({
+      vantage: 'main-dc',
+      first_epoch: 1000,
+      gridpool_chain_tip: {
+        available: true,
+        work_arrival_epoch_ms: { 'public-fast': 1_000_000 },
+      },
+    })
+    const oregon = race({
+      vantage: 'oregon-vps',
+      first_epoch: 1000.25,
+      gridpool_chain_tip: {
+        available: true,
+        work_arrival_epoch_ms: { 'public-fast': 1_000_250 },
+      },
+    })
+
+    const [mainTimeline, oregonTimeline] = buildSynchronizedTimelines([main, oregon])
+    const firstMarker = (timeline: typeof mainTimeline) =>
+      timeline.groups
+        .find((group) => group.category === 'public')!
+        .rows.find((row) => row.label === 'public-fast')!
+        .markers[0]
+
+    expect(mainTimeline.startEpochMs).toBe(1_000_000)
+    expect(oregonTimeline.startEpochMs).toBe(1_000_000)
+    expect(firstMarker(mainTimeline).offsetMs).toBe(0)
+    expect(firstMarker(oregonTimeline).offsetMs).toBe(250)
+    expect(mainTimeline.durationMs).toBe(700)
+    expect(oregonTimeline.durationMs).toBe(700)
+  })
+
+  it('models fast GridPool at peer-header arrival without changing endpoint data', () => {
+    const result = buildUnifiedTimeline(race({
+      gridpool_chain_tip: {
+        available: true,
+        work_arrival_epoch_ms: {
+          'public-fast': 1_000_000,
+          'local-sv2': 1_000_450,
+        },
+        first_peer_header: {
+          timestamp_utc: '1970-01-01T00:16:39.900Z',
+          epoch_ms: 999_900,
+          transport: 'udp',
+        },
+      },
+    }))
+    const protocol = result.groups.find((group) => group.category === 'protocol')!
+    const synthetic = protocol.rows.find(
+      (row) => row.id === 'protocol-synthetic-fast-gridpool',
+    )!
+
+    expect(synthetic.status).toBe('observed')
+    expect(synthetic.markers[0].kind).toBe('synthetic')
+    expect(synthetic.markers[0].epochMs).toBe(999_900)
+    expect(synthetic.markers[0].source).toBe('local-sv1')
   })
 })

@@ -79,6 +79,7 @@ class LocalStorage:
             "total_races": 0,
             "vantage_points": [],
             "pools": {},
+            "gridpool_events": {},
         }
         aggregate_files = [
             self.api_dir / "aggregates" / "recent-10.json",

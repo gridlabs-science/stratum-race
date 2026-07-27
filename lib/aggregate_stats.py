@@ -105,6 +105,146 @@ def compute_stats(acc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+GRIDPOOL_EVENT_DEFINITIONS = {
+    "peer_header": {
+        "label": "GridPool peer chain-tip",
+        "field": "first_peer_header",
+        "synthetic": False,
+    },
+    "local_node": {
+        "label": "Local Bitcoin node notification",
+        "field": "local_node",
+        "synthetic": False,
+    },
+    "local_header": {
+        "label": "Local raw block header",
+        "field": "local_header",
+        "synthetic": False,
+    },
+    "payout_snapshot": {
+        "label": "GridPool payout snapshot",
+        "field": "payout_snapshot",
+        "synthetic": False,
+    },
+    "relay_dispatch": {
+        "label": "GridPool relay dispatch",
+        "field": "relay_dispatch",
+        "synthetic": False,
+    },
+    "synthetic_fast_gridpool": {
+        "label": "Synthetic Fast GridPool",
+        "field": None,
+        "synthetic": True,
+    },
+}
+
+
+def _event_stats(offsets: List[float], eligible: int) -> Dict[str, Any]:
+    """Summarize signed offsets from the first miner-facing work event."""
+    if not offsets:
+        return {
+            "median_ms": None,
+            "avg_ms": None,
+            "p95_ms": None,
+            "observations": 0,
+            "races_eligible": eligible,
+            "before_first_work_pct": None,
+        }
+    ordered = sorted(offsets)
+    return {
+        "median_ms": round(percentile(ordered, 0.5), 3),
+        "avg_ms": round(sum(ordered) / len(ordered), 3),
+        "p95_ms": round(percentile(ordered, 0.95), 3),
+        "observations": len(ordered),
+        "races_eligible": eligible,
+        "before_first_work_pct": round(
+            sum(1 for value in ordered if value < 0) / len(ordered) * 100.0,
+            1,
+        ),
+    }
+
+
+def _compute_gridpool_event_stats(races: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate measured node events and the explicitly synthetic fast lane."""
+    event_data: Dict[str, Dict[str, Any]] = {
+        name: {
+            "combined": [],
+            "by_vantage": {},
+            "eligible": 0,
+            "eligible_by_vantage": {},
+        }
+        for name in GRIDPOOL_EVENT_DEFINITIONS
+    }
+
+    for race in races:
+        vantage = str(race.get("vantage", "unknown"))
+        tip = race.get("gridpool_chain_tip") or {}
+        if not isinstance(tip, dict):
+            continue
+        first_work_epoch_ms = tip.get("first_work_epoch_ms")
+        if not isinstance(first_work_epoch_ms, (int, float)):
+            first_work_epoch_ms = float(race.get("first_epoch", 0)) * 1000.0
+
+        local_pools = {
+            name
+            for name, cohort in (race.get("pool_cohorts") or {}).items()
+            if cohort == "gridpool-local"
+        }
+        local_arrivals = {
+            name: value
+            for name, value in (tip.get("work_arrival_epoch_ms") or {}).items()
+            if name in local_pools and isinstance(value, (int, float))
+        }
+        if not local_arrivals:
+            race_first_epoch_ms = float(race.get("first_epoch", 0)) * 1000.0
+            local_arrivals = {
+                name: race_first_epoch_ms + float(offset)
+                for name, offset in (race.get("arrivals_offset_ms") or {}).items()
+                if name in local_pools and isinstance(offset, (int, float))
+            }
+
+        for name, definition in GRIDPOOL_EVENT_DEFINITIONS.items():
+            entry = event_data[name]
+            entry["eligible"] += 1
+            entry["eligible_by_vantage"][vantage] = (
+                entry["eligible_by_vantage"].get(vantage, 0) + 1
+            )
+
+            event = None
+            if definition["synthetic"]:
+                peer = tip.get("first_peer_header")
+                if local_arrivals and isinstance(peer, dict):
+                    event = peer
+            else:
+                event = tip.get(definition["field"])
+
+            if not isinstance(event, dict):
+                continue
+            epoch_ms = event.get("epoch_ms")
+            if not isinstance(epoch_ms, (int, float)):
+                continue
+            offset = float(epoch_ms) - float(first_work_epoch_ms)
+            entry["combined"].append(offset)
+            entry["by_vantage"].setdefault(vantage, []).append(offset)
+
+    output: Dict[str, Any] = {}
+    for name, definition in GRIDPOOL_EVENT_DEFINITIONS.items():
+        entry = event_data[name]
+        output[name] = {
+            "label": definition["label"],
+            "synthetic": definition["synthetic"],
+            "combined": _event_stats(entry["combined"], entry["eligible"]),
+            "by_vantage": {
+                vantage: _event_stats(
+                    offsets,
+                    entry["eligible_by_vantage"].get(vantage, 0),
+                )
+                for vantage, offsets in entry["by_vantage"].items()
+            },
+        }
+    return output
+
+
 def compute_aggregate(
     races: List[Dict[str, Any]], label: str, generated_at: datetime
 ) -> Dict[str, Any]:
@@ -119,6 +259,7 @@ def compute_aggregate(
             "total_races": 0,
             "vantage_points": [],
             "pools": {},
+            "gridpool_events": {},
         }
 
     # Collect vantage points seen
@@ -285,4 +426,5 @@ def compute_aggregate(
         "total_races": len(races),
         "vantage_points": vantage_points,
         "pools": pools_output,
+        "gridpool_events": _compute_gridpool_event_stats(races),
     }

@@ -5,7 +5,7 @@ import { useRaceStore } from '@/stores/raceStore'
 import { useTimezone } from '@/composables/useTimezone'
 import { useVantageNames } from '@/composables/useVantageNames'
 import type { RaceResult, RecentBlock } from '@/types'
-import { buildUnifiedTimeline } from '@/utils/blockTimeline'
+import { buildSynchronizedTimelines } from '@/utils/blockTimeline'
 import type { UnifiedTimelineMarker, UnifiedVantageTimeline } from '@/utils/blockTimeline'
 
 const route = useRoute()
@@ -93,7 +93,7 @@ const races = computed(() => fullRaces.value.length > 0 ? fullRaces.value : rece
 /** Primary race data (first match or null) */
 const primaryRace = computed(() => races.value[0] ?? null)
 
-const unifiedTimelines = computed(() => fullRaces.value.map(buildUnifiedTimeline))
+const unifiedTimelines = computed(() => buildSynchronizedTimelines(fullRaces.value))
 
 const endpointCount = computed(() => {
   const race = primaryRace.value as RaceResult | null
@@ -243,6 +243,9 @@ function markerTitle(marker: UnifiedTimelineMarker): string {
         <span class="legend-item">
           <span class="legend-marker marker-opaque"></span>SV2 usable job
         </span>
+        <span class="legend-item">
+          <span class="legend-marker marker-synthetic"></span>Synthetic model
+        </span>
       </div>
 
       <section
@@ -263,7 +266,7 @@ function markerTitle(marker: UnifiedTimelineMarker): string {
         </header>
 
         <div class="timeline-axis">
-          <span class="axis-origin">Earliest event</span>
+          <span class="axis-origin">Shared wall-clock origin</span>
           <span
             v-for="tick in axisTicks(timeline)"
             :key="tick.ratio"
@@ -299,7 +302,9 @@ function markerTitle(marker: UnifiedTimelineMarker): string {
         </div>
 
         <p class="timeline-note">
-          GridPool peer-header timing is measured notification lead only. Peer headers do not currently activate mining templates.
+          All vantage timelines share one wall-clock axis. Clock trust is an operator assumption for this controlled experiment.
+          Synthetic Fast GridPool models the fastest observed local backend emitting work at peer-header arrival; it is not measured
+          mining behavior and peer headers do not currently activate templates.
         </p>
       </section>
     </template>
@@ -458,6 +463,12 @@ function markerTitle(marker: UnifiedTimelineMarker): string {
   border-radius: 1px;
   transform: rotate(45deg);
   background: var(--accent);
+}
+
+.legend-marker.marker-synthetic {
+  border-color: #e879f9;
+  border-style: dashed;
+  background: transparent;
 }
 
 .timeline-section {
@@ -657,6 +668,15 @@ function markerTitle(marker: UnifiedTimelineMarker): string {
   width: 15px;
   height: 15px;
   box-shadow: 0 0 0 4px rgb(56 189 248 / 18%);
+}
+
+.timeline-marker.marker-synthetic {
+  width: 15px;
+  height: 15px;
+  border-color: #e879f9;
+  border-style: dashed;
+  background: var(--surface);
+  color: #e879f9;
 }
 
 .marker-time {
