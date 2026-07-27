@@ -99,6 +99,11 @@ export interface GridPoolEventStats {
   observations: number
   races_eligible: number
   before_first_work_pct: number | null
+  early_observations: number
+  early_opportunity_pct: number | null
+  median_early_lead_ms: number | null
+  avg_early_lead_ms: number | null
+  p95_early_lead_ms: number | null
 }
 
 export interface GridPoolEventAggregate {

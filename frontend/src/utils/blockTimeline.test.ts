@@ -161,6 +161,11 @@ describe('buildUnifiedTimeline', () => {
           epoch_ms: 999_900,
           transport: 'udp',
         },
+        local_node: {
+          timestamp_utc: '1970-01-01T00:16:40.100Z',
+          epoch_ms: 1_000_100,
+          transport: 'bitcoin-zmq-hashblock',
+        },
       },
     }))
     const protocol = result.groups.find((group) => group.category === 'protocol')!
@@ -172,5 +177,30 @@ describe('buildUnifiedTimeline', () => {
     expect(synthetic.markers[0].kind).toBe('synthetic')
     expect(synthetic.markers[0].epochMs).toBe(999_900)
     expect(synthetic.markers[0].source).toBe('local-sv1')
+  })
+
+  it('does not model a peer hint that arrives after the local node', () => {
+    const result = buildUnifiedTimeline(race({
+      gridpool_chain_tip: {
+        available: true,
+        first_peer_header: {
+          timestamp_utc: '1970-01-01T00:16:40.200Z',
+          epoch_ms: 1_000_200,
+          transport: 'udp',
+        },
+        local_node: {
+          timestamp_utc: '1970-01-01T00:16:40.100Z',
+          epoch_ms: 1_000_100,
+          transport: 'bitcoin-zmq-hashblock',
+        },
+      },
+    }))
+    const protocol = result.groups.find((group) => group.category === 'protocol')!
+    const synthetic = protocol.rows.find(
+      (row) => row.id === 'protocol-synthetic-fast-gridpool',
+    )!
+
+    expect(synthetic.status).toBe('missing')
+    expect(synthetic.markers).toHaveLength(0)
   })
 })

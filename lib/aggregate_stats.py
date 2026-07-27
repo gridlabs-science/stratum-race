@@ -140,7 +140,8 @@ GRIDPOOL_EVENT_DEFINITIONS = {
 
 
 def _event_stats(offsets: List[float], eligible: int) -> Dict[str, Any]:
-    """Summarize signed offsets from the first miner-facing work event."""
+    """Summarize signed offsets from the first sovereign local work event."""
+    early_leads = [-value for value in offsets if value < 0]
     if not offsets:
         return {
             "median_ms": None,
@@ -149,6 +150,11 @@ def _event_stats(offsets: List[float], eligible: int) -> Dict[str, Any]:
             "observations": 0,
             "races_eligible": eligible,
             "before_first_work_pct": None,
+            "early_observations": 0,
+            "early_opportunity_pct": 0.0 if eligible else None,
+            "median_early_lead_ms": None,
+            "avg_early_lead_ms": None,
+            "p95_early_lead_ms": None,
         }
     ordered = sorted(offsets)
     return {
@@ -161,7 +167,56 @@ def _event_stats(offsets: List[float], eligible: int) -> Dict[str, Any]:
             sum(1 for value in ordered if value < 0) / len(ordered) * 100.0,
             1,
         ),
+        "early_observations": len(early_leads),
+        "early_opportunity_pct": round(
+            len(early_leads) / eligible * 100.0,
+            1,
+        )
+        if eligible
+        else None,
+        "median_early_lead_ms": round(percentile(early_leads, 0.5), 3)
+        if early_leads
+        else None,
+        "avg_early_lead_ms": round(sum(early_leads) / len(early_leads), 3)
+        if early_leads
+        else None,
+        "p95_early_lead_ms": round(percentile(early_leads, 0.95), 3)
+        if early_leads
+        else None,
     }
+
+
+def _first_local_work_epoch_ms(race: Dict[str, Any], tip: Dict[str, Any]) -> float | None:
+    """Find the first full SV1 or miner-usable opaque SV2 local job."""
+    cohorts = race.get("pool_cohorts") or {}
+    protocols = race.get("pool_protocols") or {}
+    observability = race.get("template_observability") or {}
+    local_pools = {name for name, cohort in cohorts.items() if cohort == "gridpool-local"}
+    if not local_pools:
+        return None
+
+    race_first_epoch_ms = float(race.get("first_epoch", 0)) * 1000.0
+    absolute_arrivals = tip.get("work_arrival_epoch_ms") or {}
+    any_offsets = race.get("arrivals_offset_ms") or {}
+    full_offsets = race.get("nonempty_arrivals_offset_ms") or {}
+    arrivals: List[float] = []
+
+    for name in local_pools:
+        full_offset = full_offsets.get(name)
+        if isinstance(full_offset, (int, float)):
+            arrivals.append(race_first_epoch_ms + float(full_offset))
+            continue
+
+        if protocols.get(name) == "sv2" or observability.get(name) == "opaque":
+            absolute = absolute_arrivals.get(name)
+            if isinstance(absolute, (int, float)):
+                arrivals.append(float(absolute))
+                continue
+            any_offset = any_offsets.get(name)
+            if isinstance(any_offset, (int, float)):
+                arrivals.append(race_first_epoch_ms + float(any_offset))
+
+    return min(arrivals) if arrivals else None
 
 
 def _compute_gridpool_event_stats(races: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -181,27 +236,9 @@ def _compute_gridpool_event_stats(races: List[Dict[str, Any]]) -> Dict[str, Any]
         tip = race.get("gridpool_chain_tip") or {}
         if not isinstance(tip, dict):
             continue
-        first_work_epoch_ms = tip.get("first_work_epoch_ms")
-        if not isinstance(first_work_epoch_ms, (int, float)):
-            first_work_epoch_ms = float(race.get("first_epoch", 0)) * 1000.0
-
-        local_pools = {
-            name
-            for name, cohort in (race.get("pool_cohorts") or {}).items()
-            if cohort == "gridpool-local"
-        }
-        local_arrivals = {
-            name: value
-            for name, value in (tip.get("work_arrival_epoch_ms") or {}).items()
-            if name in local_pools and isinstance(value, (int, float))
-        }
-        if not local_arrivals:
-            race_first_epoch_ms = float(race.get("first_epoch", 0)) * 1000.0
-            local_arrivals = {
-                name: race_first_epoch_ms + float(offset)
-                for name, offset in (race.get("arrivals_offset_ms") or {}).items()
-                if name in local_pools and isinstance(offset, (int, float))
-            }
+        first_local_work_epoch_ms = _first_local_work_epoch_ms(race, tip)
+        if first_local_work_epoch_ms is None:
+            continue
 
         for name, definition in GRIDPOOL_EVENT_DEFINITIONS.items():
             entry = event_data[name]
@@ -213,7 +250,15 @@ def _compute_gridpool_event_stats(races: List[Dict[str, Any]]) -> Dict[str, Any]
             event = None
             if definition["synthetic"]:
                 peer = tip.get("first_peer_header")
-                if local_arrivals and isinstance(peer, dict):
+                local_node = tip.get("local_node") or tip.get("local_zmq")
+                if (
+                    isinstance(peer, dict)
+                    and isinstance(local_node, dict)
+                    and isinstance(peer.get("epoch_ms"), (int, float))
+                    and isinstance(local_node.get("epoch_ms"), (int, float))
+                    and peer["epoch_ms"] < local_node["epoch_ms"]
+                    and peer["epoch_ms"] < first_local_work_epoch_ms
+                ):
                     event = peer
             else:
                 event = tip.get(definition["field"])
@@ -223,7 +268,7 @@ def _compute_gridpool_event_stats(races: List[Dict[str, Any]]) -> Dict[str, Any]
             epoch_ms = event.get("epoch_ms")
             if not isinstance(epoch_ms, (int, float)):
                 continue
-            offset = float(epoch_ms) - float(first_work_epoch_ms)
+            offset = float(epoch_ms) - first_local_work_epoch_ms
             entry["combined"].append(offset)
             entry["by_vantage"].setdefault(vantage, []).append(offset)
 

@@ -30,9 +30,9 @@ function formatSigned(value: number | null): string {
 
 function interpretation(value: number | null): string {
   if (value == null) return 'No observation'
-  if (value < 0) return 'Before first work'
-  if (value > 0) return 'After first work'
-  return 'At first work'
+  if (value < 0) return 'Before local work'
+  if (value > 0) return 'After local work'
+  return 'At local work'
 }
 </script>
 
@@ -41,7 +41,7 @@ function interpretation(value: number | null): string {
     <header class="panel-head">
       <div>
         <h2>Node &amp; GridPool Event Latency</h2>
-        <p>Signed milliseconds from the first miner-facing work observed at each vantage.</p>
+        <p>Measured against the first sovereign local full SV1 or miner-usable SV2 job.</p>
       </div>
       <span class="origin-note">negative = earlier</span>
     </header>
@@ -51,11 +51,11 @@ function interpretation(value: number | null): string {
         <thead>
           <tr>
             <th>Event</th>
-            <th>Median (ms)</th>
-            <th>Average (ms)</th>
-            <th>P95 (ms)</th>
-            <th>Earlier</th>
-            <th>Samples</th>
+            <th>Median vs Local (ms)</th>
+            <th>Early Opportunities</th>
+            <th>Average Saved (ms)</th>
+            <th>P95 Saved (ms)</th>
+            <th>Observed</th>
           </tr>
         </thead>
         <tbody>
@@ -70,9 +70,12 @@ function interpretation(value: number | null): string {
               <small>{{ interpretation(row.stats?.median_ms ?? null) }}</small>
             </td>
             <td>{{ formatSigned(row.stats?.median_ms ?? null) }}</td>
-            <td>{{ formatSigned(row.stats?.avg_ms ?? null) }}</td>
-            <td>{{ formatSigned(row.stats?.p95_ms ?? null) }}</td>
-            <td>{{ row.stats?.before_first_work_pct != null ? `${row.stats.before_first_work_pct.toFixed(1)}%` : '—' }}</td>
+            <td>
+              {{ row.stats?.early_observations ?? 0 }} / {{ row.stats?.races_eligible ?? 0 }}
+              <small>{{ row.stats?.early_opportunity_pct != null ? `${row.stats.early_opportunity_pct.toFixed(1)}%` : '—' }}</small>
+            </td>
+            <td>{{ row.stats?.avg_early_lead_ms != null ? row.stats.avg_early_lead_ms.toFixed(1) : '—' }}</td>
+            <td>{{ row.stats?.p95_early_lead_ms != null ? row.stats.p95_early_lead_ms.toFixed(1) : '—' }}</td>
             <td>{{ row.stats?.observations ?? 0 }} / {{ row.stats?.races_eligible ?? 0 }}</td>
           </tr>
         </tbody>
@@ -80,8 +83,9 @@ function interpretation(value: number | null): string {
     </div>
 
     <p class="method-note">
-      Synthetic Fast GridPool places the fastest measured local backend at the peer-header arrival time.
-      It estimates possible notification headroom; it is not an observed template and never counts as a pool win.
+      “Saved” uses only events that preceded local work. Synthetic Fast GridPool includes only races where a peer
+      header beat both the local Bitcoin-node notification and local work, then places modeled empty work at that
+      peer arrival. It is not an observed template and never counts as a pool win.
     </p>
   </section>
 </template>

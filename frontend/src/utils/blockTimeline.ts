@@ -164,7 +164,12 @@ export function buildUnifiedTimeline(race: RaceResult): UnifiedVantageTimeline {
   const fastestLocalRow = endpointRows
     .filter((row) => row.category === 'local' && row.status === 'observed')
     .sort((left, right) => left.sortEpochMs - right.sortEpochMs)[0]
-  const syntheticMarker = peerMarker && fastestLocalRow
+  const localNodeEvent = tip?.local_node ?? tip?.local_zmq
+  const syntheticMarker = peerMarker
+    && fastestLocalRow
+    && localNodeEvent
+    && peerMarker.epochMs < localNodeEvent.epoch_ms
+    && peerMarker.epochMs < fastestLocalRow.sortEpochMs
     ? {
         ...peerMarker,
         kind: 'synthetic' as const,

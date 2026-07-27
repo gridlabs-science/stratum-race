@@ -243,14 +243,22 @@ class TestComputeAggregate:
         result = compute_aggregate([race], "2025-01-15", now)
         events = result["gridpool_events"]
 
-        assert events["peer_header"]["combined"]["median_ms"] == -300.0
+        assert events["peer_header"]["combined"]["median_ms"] == -500.0
         assert events["peer_header"]["combined"]["before_first_work_pct"] == 100.0
-        assert events["local_node"]["combined"]["median_ms"] == 100.0
-        assert events["payout_snapshot"]["combined"]["median_ms"] == 250.0
+        assert events["local_node"]["combined"]["median_ms"] == -100.0
+        assert events["payout_snapshot"]["combined"]["median_ms"] == 50.0
         assert events["synthetic_fast_gridpool"]["synthetic"] is True
         assert (
             events["synthetic_fast_gridpool"]["by_vantage"]["us-east"]["median_ms"]
-            == -300.0
+            == -500.0
+        )
+        assert (
+            events["synthetic_fast_gridpool"]["combined"]["avg_early_lead_ms"]
+            == 500.0
+        )
+        assert (
+            events["synthetic_fast_gridpool"]["combined"]["early_opportunity_pct"]
+            == 100.0
         )
 
     def test_synthetic_lane_supports_older_races_without_absolute_arrivals(self):
@@ -267,10 +275,37 @@ class TestComputeAggregate:
             "gridpool_chain_tip": {
                 "first_work_epoch_ms": 20_000.0,
                 "first_peer_header": {"epoch_ms": 19_900.0},
+                "local_node": {"epoch_ms": 20_000.0},
             },
         }
 
         result = compute_aggregate([race], "2025-01-15", now)
         synthetic = result["gridpool_events"]["synthetic_fast_gridpool"]
-        assert synthetic["combined"]["median_ms"] == -100.0
+        assert synthetic["combined"]["median_ms"] == -150.0
         assert synthetic["combined"]["observations"] == 1
+
+    def test_synthetic_lane_excludes_peer_hints_that_lose_to_local_node(self):
+        """A peer hint is modeled only when it beats both local validation and work."""
+        now = datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        race = {
+            "vantage": "local-first",
+            "first_epoch": 30.0,
+            "nonempty_arrivals_offset_ms": {"local-sv1": 200.0},
+            "arrivals_offset_ms": {"local-sv1": 200.0},
+            "empty_first_pools": [],
+            "eligible_at_start": ["local-sv1"],
+            "pool_cohorts": {"local-sv1": "gridpool-local"},
+            "gridpool_chain_tip": {
+                "first_peer_header": {"epoch_ms": 30_150.0},
+                "local_node": {"epoch_ms": 30_100.0},
+            },
+        }
+
+        result = compute_aggregate([race], "2025-01-15", now)
+        events = result["gridpool_events"]
+        assert events["peer_header"]["combined"]["avg_early_lead_ms"] == 50.0
+        assert events["synthetic_fast_gridpool"]["combined"]["observations"] == 0
+        assert (
+            events["synthetic_fast_gridpool"]["combined"]["early_opportunity_pct"]
+            == 0.0
+        )
