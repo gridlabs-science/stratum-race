@@ -1,0 +1,19 @@
+pool,pool_label,vantage,observed,expected,missing,missing_pct,first_observed_height,post_start_expected,post_start_missing,post_start_missing_pct,median_ms,p95_ms,empty_first_pct
+gridpool_sv2,GridPool Native SV2,main-dc,250,353,103,29.2,959751,353,103,29.2,333.445,958.766,0.0
+gridpool_sv2,GridPool Native SV2,oregon-vps,240,353,113,32.0,959846,259,19,7.3,385.976,849.46,0.0
+gridpool_hydrapool,GridPool Hydrapool SV1,main-dc,353,353,0,0.0,959751,353,0,0.0,647.52,1436.944,0.0
+gridpool_hydrapool,GridPool Hydrapool SV1,oregon-vps,353,353,0,0.0,959751,353,0,0.0,579.187,1062.391,0.0
+gridpool_ckpool,GridPool CKPool SV1,main-dc,341,353,12,3.4,959751,353,12,3.4,743.634,5531.866,0.0
+gridpool_ckpool,GridPool CKPool SV1,oregon-vps,353,353,0,0.0,959751,353,0,0.0,898.765,2132.864,0.0
+gridpool_datum,GridPool DATUM SV1,main-dc,353,353,0,0.0,959751,353,0,0.0,952.0,1807.009,100.0
+gridpool_datum,GridPool DATUM SV1,oregon-vps,351,353,2,0.6,959751,353,2,0.6,930.041,1635.132,100.0
+atlaspool,AtlasPool,main-dc,353,353,0,0.0,959751,353,0,0.0,0.0,153.768,0.0
+atlaspool,AtlasPool,oregon-vps,353,353,0,0.0,959751,353,0,0.0,0.0,130.878,0.0
+parasite,Parasite,main-dc,351,353,2,0.6,959751,353,2,0.6,72.948,1668.998,0.0
+parasite,Parasite,oregon-vps,353,353,0,0.0,959751,353,0,0.0,142.779,445.354,0.0
+ocean,OCEAN,main-dc,352,353,1,0.3,959751,353,1,0.3,479.453,2253.985,100.0
+ocean,OCEAN,oregon-vps,351,353,2,0.6,959751,353,2,0.6,643.82,1230.289,100.0
+public_pool,Public Pool,main-dc,350,353,3,0.8,959751,353,3,0.8,1452.965,5057.959,98.0
+public_pool,Public Pool,oregon-vps,351,353,2,0.6,959751,353,2,0.6,1417.813,3696.39,98.6
+pyblock,PyBLOCK,main-dc,353,353,0,0.0,959751,353,0,0.0,676.054,3215.925,0.0
+pyblock,PyBLOCK,oregon-vps,352,353,1,0.3,959751,353,1,0.3,690.619,1941.996,0.0

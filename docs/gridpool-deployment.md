@@ -83,3 +83,15 @@ treated as precise latency measurements.
   trigger templates, snapshots, or mining.
 - Treat fewer than 20 blocks as anecdotal. Prefer 72-hour and 7-day windows.
 
+## Multi-Vantage Report
+
+Generate a matched-height report from the locally retained central data:
+
+```bash
+python3 scripts/gridpool-multivantage-report.py
+```
+
+The generator requires every configured vantage to have observed each included
+height. It writes Markdown, JSON, and CSV under `reports/stratumrace/`, including
+sample counts, median/p95 timing, missing-event rates, GridPool peer-header
+opportunities, and cross-vantage wall-clock caveats.

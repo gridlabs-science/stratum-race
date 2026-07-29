@@ -1,0 +1,13 @@
+event,event_label,synthetic,vantage,observed,expected,missing,missing_pct,median_offset_ms,p95_offset_ms,early_observations,early_opportunity_pct,median_early_lead_ms,p95_early_lead_ms
+peer_header,GridPool peer chain-tip,False,main-dc,147,353,206,58.4,-387.503,-62.159,147,41.6,387.503,1138.955
+peer_header,GridPool peer chain-tip,False,oregon-vps,353,353,0,0.0,1.262,509.113,176,49.9,152.323,680.484
+local_node,Local Bitcoin node notification,False,main-dc,353,353,0,0.0,-34.942,-20.0,352,99.7,34.942,321.862
+local_node,Local Bitcoin node notification,False,oregon-vps,353,353,0,0.0,-43.366,-26.93,352,99.7,43.366,206.653
+local_header,Local raw block header,False,main-dc,347,353,6,1.7,-30.498,27.052,285,80.7,33.665,316.729
+local_header,Local raw block header,False,oregon-vps,353,353,0,0.0,-11.824,101.396,279,79.0,17.139,194.005
+payout_snapshot,GridPool payout snapshot,False,main-dc,348,353,5,1.4,-28.357,-15.571,347,98.3,28.357,312.331
+payout_snapshot,GridPool payout snapshot,False,oregon-vps,353,353,0,0.0,-41.215,-25.025,352,99.7,41.215,205.133
+relay_dispatch,GridPool relay dispatch,False,main-dc,348,353,5,1.4,2.966,35.02,159,45.0,140.523,301.993
+relay_dispatch,GridPool relay dispatch,False,oregon-vps,353,353,0,0.0,-6.489,106.147,264,74.8,10.9,180.995
+synthetic_fast_gridpool,Synthetic Fast GridPool,True,main-dc,146,353,207,58.6,-388.826,-68.089,146,41.4,387.503,1138.955
+synthetic_fast_gridpool,Synthetic Fast GridPool,True,oregon-vps,138,353,215,60.9,-258.702,-51.747,138,39.1,257.302,703.689
